@@ -1,0 +1,31 @@
+# Build
+node_modules/
+oh_modules/
+.cxx/
+.hvigor/
+**/build/
+.preview/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Signing (DO NOT COMMIT)
+*.p12
+*.p7b
+*.cer
+signing/
+
+# DevEco generated (do not commit)
+local.properties
+code-linter.json5
+oh-package-lock.json5
+
+# Temp
+*.tmp
+*.swp
+*~
