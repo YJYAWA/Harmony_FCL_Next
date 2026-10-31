@@ -58,6 +58,15 @@ MobileGlues / MobileGL 渲染器、OpenAL 音频）移植进来，使这个启�
 - **MobileGL** — DirectVulkan 渲染器，**MC 26.3+ 版本需要**。`libmobilegl.so` 随 HAP 分发。
 - GL4ES / VirGL / Zink — legacy 路径。
 
+**接线方式（不是摆设）**：选择持久化到 `AppStorage('fcl.renderer')`，启动时经
+`launchJVM` 第 4 参传入 native，按 AMCL `GraphicsBackendPlan.serializeGraphicsPlan`
+的 wire 协议构造 GraphicsPlan 并调用 `ParseGraphicsPlan` + `ActivateGraphicsPlan`
+激活（MobileGL = `v=v2;profile=minecraft-vulkan;api=VULKAN;window=SDL3;slot=LWJGL3;
+admission=VALIDATION;requirement=minecraft-26.3-sdl-vulkan-conservative-v1`），
+`jvmInit` 随后注入 `-Damcl.graphics.profile`，图形后端会话据此装载
+EGL/MobileGlues 或 MobileGL(DirectVulkan) 提供者。计划被拒不阻断启动，
+回退 AMCL 无计划默认行为并留日志。
+
 ## JDK 运行时
 
 | MC 版本 | JDK | mc-ohos-resources 资产 |

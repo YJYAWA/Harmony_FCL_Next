@@ -18,6 +18,7 @@
 #include "jvm/jvm_launcher.h"
 #include "jvm/jni.h"
 #include "napi/fcl_fork_jar.h"
+#include "platform/graphics_plan.h"
 #include "utils/amcl_log.h"
 
 #include <hilog/log.h>
@@ -186,6 +187,7 @@ struct LaunchWorkData {
     std::vector<std::string> jvmArgs;
     std::vector<std::string> programArgs;
     std::vector<std::string> argvAll;
+    std::string renderer; // mobileglues(默认) / mobilegl / gl4es / auto
     // 输出
     int exitCode = 0;
 };
@@ -246,6 +248,40 @@ static void LaunchExecute(napi_env env, void* data) {
         return;
     }
     std::string jdkVersion = DeriveJdkVersion(w->filesDir, jdkDir);
+
+    // ============================================================
+    //  渲染器选择 → AMCL GraphicsPlan 激活
+    //  （在 jvmInit 之前激活，jvm_launcher 会注入 -Damcl.graphics.profile，
+    //   图形后端会话据此选择 EGL/MobileGlues 或 MobileGL(DirectVulkan) 提供者。）
+    //  wire 协议与 AMCL GraphicsBackendPlan.serializeGraphicsPlan 完全一致：
+    //    v1（7 字段）：v;profile;api;window;route;transport;strict
+    //    v2（12 字段）：v;profile;api;window;route;transport;strict;policy;game;slot;admission;requirement
+    // ============================================================
+    {
+        std::string wire;
+        if (w->renderer == "mobilegl") {
+            // MC 26.3+：MobileGL DirectVulkan（SDL3 窗口提供者 + 26.3 保守审计基线）
+            wire = "v=v2;profile=minecraft-vulkan;api=VULKAN;window=SDL3;route=minecraft-vulkan"
+                   ";transport=YES;strict=0;policy=ALLOW;game=VULKAN;slot=LWJGL3"
+                   ";admission=VALIDATION;requirement=minecraft-26.3-sdl-vulkan-conservative-v1";
+        } else if (w->renderer == "gl4es") {
+            wire = "v=v1;profile=gl4es;api=OPENGL;window=GLFW;route=gl4es;transport=UNKNOWN;strict=0";
+        } else {
+            // 默认与 'mobileglues'/'auto'：MobileGlues（AMCL 实测基线）
+            wire = "v=v1;profile=mobileglues;api=OPENGL;window=GLFW;route=mobileglues;transport=UNKNOWN;strict=0";
+        }
+        amcl::graphics::GraphicsPlan plan;
+        std::string planError;
+        if (amcl::graphics::ParseGraphicsPlan(wire, plan, planError) &&
+            amcl::graphics::ActivateGraphicsPlan(plan, planError)) {
+            AMCL_LOG_I(LOG_TAG, "graphics plan activated: renderer=%{public}s profile=%{public}s",
+                       w->renderer.c_str(), plan.profile.c_str());
+        } else {
+            // 计划被拒不阻断启动——回到 AMCL 无计划默认行为，但要把原因留在日志里
+            AMCL_LOG_E(LOG_TAG, "graphics plan rejected (%{public}s): renderer=%{public}s wire=%{public}s",
+                       planError.c_str(), w->renderer.c_str(), wire.c_str());
+        }
+    }
 
     AMCL_LOG_I(LOG_TAG, "launchJVM: jdk=%{public}s mainClass=%{public}s cp=%{public}zu chars",
                jdkVersion.c_str(), p.mainClass.c_str(), p.classpath.size());
@@ -324,13 +360,13 @@ static std::vector<std::string> NapiGetStringArray(napi_env env, napi_value arr)
     return out;
 }
 
-/** launchJVM(filesDir: string, jdkDir: string, argv: string[]): Promise<number> */
+/** launchJVM(filesDir: string, jdkDir: string, argv: string[], renderer?: string): Promise<number> */
 static napi_value LaunchJVM(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3] = {nullptr, nullptr, nullptr};
+    size_t argc = 4;
+    napi_value argv[4] = {nullptr, nullptr, nullptr, nullptr};
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     if (argc < 3) {
-        napi_throw_error(env, nullptr, "launchJVM requires (filesDir, jdkDir, argv)");
+        napi_throw_error(env, nullptr, "launchJVM requires (filesDir, jdkDir, argv, [renderer])");
         return nullptr;
     }
 
@@ -339,6 +375,9 @@ static napi_value LaunchJVM(napi_env env, napi_callback_info info) {
     w->filesDir = NapiGetString(env, argv[0]);
     w->jdkDir = NapiGetString(env, argv[1]);
     w->argvAll = NapiGetStringArray(env, argv[2]);
+    if (argc >= 4 && argv[3] != nullptr) {
+        w->renderer = NapiGetString(env, argv[3]);
+    }
     w->parsed = parseLaunchArgv(w->argvAll);
 
     if (w->parsed.mainClass.empty()) {

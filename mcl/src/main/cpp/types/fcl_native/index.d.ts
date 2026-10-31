@@ -10,9 +10,10 @@ export const checkJitAvailable: () => boolean;
  * @param filesDir 应用沙箱 filesDir
  * @param jdkDir   JDK 根目录（如 filesDir/jdk/17）
  * @param argv     完整 java 命令行（buildLaunchCommand 的输出）
+ * @param renderer 渲染器：'mobileglues'(默认) / 'mobilegl'(DirectVulkan, MC 26.3+) / 'gl4es' / 'auto'
  * @returns Promise，游戏 main() 返回后 resolve 退出码（0 成功 / 负数失败码）
  */
-export const launchJVM: (filesDir: string, jdkDir: string, argv: Array<string>) => Promise<number>;
+export const launchJVM: (filesDir: string, jdkDir: string, argv: Array<string>, renderer?: string) => Promise<number>;
 
 /**
  * fork 子进程运行 `java -jar <jarPath>`（Forge/Fabric/OptiFine 安装器）。

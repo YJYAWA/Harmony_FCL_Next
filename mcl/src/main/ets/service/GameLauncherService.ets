@@ -266,7 +266,11 @@ export class GameLauncherService {
       // ============ NAPI 调用：进程内嵌入 JVM 并运行主类 ============
       // 阻塞语义由 Promise 承载：native 侧在 libuv 工作线程 jvmInit + jvmCallMain，
       // 游戏 main() 返回后 resolve 退出码。此 await 挂起直到游戏退出。
-      const exitCode = await native.launchJVM(filesDir, jdkDir, commandArgs);
+      // 渲染器选择（JavaManagePage 设置）激活 AMCL GraphicsPlan：
+      //   mobileglues → GL→GLES 翻译；mobilegl → DirectVulkan（MC 26.3+）；gl4es → legacy
+      const renderer = AppStorage.get<string>('fcl.renderer') ?? 'mobileglues';
+      hilog.info(0x0000, TAG, `Renderer: ${renderer}`);
+      const exitCode = await native.launchJVM(filesDir, jdkDir, commandArgs, renderer);
 
       this.processState.isRunning = false;
       this.processState.exitCode = exitCode;
