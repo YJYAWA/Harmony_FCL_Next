@@ -2,10 +2,12 @@
  * 关于/帮助页面
  * 移植自: FCL/ui/setting/AboutPage + HelpPage
  */
+import { AppVersion } from '../../core/util/AppVersion';
+
 @ComponentV2
 export struct AboutPage {
-  @Local appVersion: string = '1.0.0';
-  @Local buildDate: string = '2026-07-24';
+  @Local appVersion: string = AppVersion.VERSION_NAME;
+  @Local buildDate: string = '2026-10-31';
   @Local deviceInfo: string = 'HarmonyOS NEXT';
 
   build() {
@@ -50,9 +52,13 @@ export struct AboutPage {
 
           // 贡献者
           this.buildSection('Credits');
-          Text('FCL-Team & Community Contributors')
+          Text('YJYAWA')
             .fontSize(13).fontColor('#CCCCCC')
             .width('100%').padding(14).backgroundColor('#16213E').borderRadius(10)
+            .margin({ bottom: 8 })
+          Text(`上游 FCL 基线 ${AppVersion.UPSTREAM_BASE}`)
+            .fontSize(11).fontColor('#666666')
+            .width('100%').padding({ left: 2, right: 2 })
 
           // 底部
           Text('"Minecraft" is a trademark of Mojang Studios.\nFCL is not affiliated with Mojang, Microsoft, or Huawei.')

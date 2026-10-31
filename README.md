@@ -2,7 +2,7 @@
 
 **把 [Fold Craft Launcher (FCL)](https://github.com/FCL-Team/FoldCraftLauncher) 移植到 HarmonyOS NEXT（纯血鸿蒙）的 Minecraft: Java Edition 启动器。原生路线：无容器、无 Android 运行时，JVM 进程内嵌入。**
 
-本仓库 fork 自 [Mr-ETsir/FCL-HarmonyOS](https://github.com/Mr-ETsir/FCL-HarmonyOS)。上游完成了 FCL 的 ArkTS 界面层移植（46 个文件，约 11,000 行），但 NAPI 原生桥是空的——**不能启动游戏**。本 fork 把全部缺失的原生层移植进来，让它成为一台真正能玩的启动器。基线为 FCL 1.3.1.9（移植快照 2026-07-24）。
+本仓库 fork 自 [Mr-ETsir/FCL-HarmonyOS](https://github.com/Mr-ETsir/FCL-HarmonyOS)。上游完成了 FCL 的 ArkTS 界面层移植（46 个文件，约 11,000 行），但 NAPI 原生桥是空的——**不能启动游戏**。本 fork 把全部缺失的原生层移植进来，让它成为一台真正能玩的启动器。基线为 FCL 1.3.1.9（移植快照 2026-07-24），现已同步至上游 **FCL 1.3.4.3**（2026-10-30）。
 
 ## 本 fork 移植了什么
 
@@ -16,8 +16,10 @@
 | 游戏页面 | 全屏 XComponent（`libraryname: 'entry'`）+ 触控覆盖层 |
 | 安装器子进程 | fork + 真实 JVM（纯 C 解析 jar manifest 取 Main-Class），替换上游的伪造成功 |
 | ArkTS 修复 | 上游 51 个严格模式编译错误清零，`hvigorw assembleHap` 一键出包 |
+| 上游同步 | 跟进 FCL 1.3.4.0–1.3.4.3：FML `earlyWindowControl` 版本分流修复、MobileGlues 运行时选项齿轮配置、OSMesa/VirGL 内置渲染器剥离（对应条目移除） |
+| 无更新提示 | 彻底移除应用内更新检查与更新提示（`core/upgrade/UpdateChecker` 已删除），启动器不再联网查询上游 Release |
 | 关键适配 | 移除 AMCL 的 `-Djava.system.class.loader=AmclClassLoader`（FCL 无 amcl-launcher.jar，注入必炸 `JNI_CreateJavaVM`） |
-| 应用身份 | 包名 `com.harmony.fcl`、应用名 HarmonyFCL_Next、版本 `1.3.1.9-next.1` |
+| 应用身份 | 包名 `com.harmony.fcl`、应用名 HarmonyFCL_Next、版本 `1.3.4.3-next.1` |
 
 ## 应用身份
 
@@ -25,7 +27,7 @@
 |---|---|
 | bundleName | `com.harmony.fcl` |
 | 应用名 | HarmonyFCL_Next |
-| 版本 | 1.3.1.9-next.1 (1030109)，对应 FCL 上游 1.3.1.9 |
+| 版本 | 1.3.4.3-next.1 (1030403)，对应 FCL 上游 1.3.4.3 |
 | SDK | HarmonyOS 6.1.1（API 24） |
 | 架构 | arm64-v8a |
 | 关键权限 | `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（ACL，JIT 必需） |
@@ -37,7 +39,8 @@
 - **MobileGlues**（默认，推荐）— GL→GLES 3.2 翻译，AMCL 真机全链路验证（1.20.4）。需 `AppScope/app.json5` 的 `appEnvironments.NEED_OPENGL=1`（已配置）。
 - **MobileGL** — DirectVulkan 渲染器，**MC 26.3+ 必选**。`libmobilegl.so` 随 HAP 分发。
 - **GL4ES** — legacy（LWJGL2 时代版本）。
-- Auto-detect / VirGL / Zink — 自动匹配与实验性路径。
+- Auto-detect — 自动匹配基线。
+- ⚙ 齿轮入口（MobileGlues 行尾）— 对齐上游 FCL 1.3.4.3「内置渲染器行尾齿轮配置」，可调 MobileGlues 全量运行时选项（ANGLE、无错误模式、自定义 GL 版本、GLSL 缓存、FSR1 超分、深度清理修复模式等），仅显式配置过的键会合并写入 `files/MG/config.json`。
 
 选择持久化于 `SettingsManager.renderer`，启动时经 `launchJVM` 第 4 参进 native，按 AMCL
 `GraphicsBackendPlan.serializeGraphicsPlan` 的 wire 协议构造 GraphicsPlan 并

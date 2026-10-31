@@ -19,6 +19,7 @@ import { LaunchConfig, GameProcessState } from '../core/game/GameTypes';
 import { FileUtils } from '../core/util/FileUtils';
 import { Constants } from '../core/util/Constants';
 import { SettingsManager } from '../core/SettingsManager';
+import { FmlConfigPatcher } from '../core/game/FmlConfigPatcher';
 import { AppContext } from '../common/AppContext';
 import native from 'libfcl_native.so';
 
@@ -242,6 +243,16 @@ export class GameLauncherService {
           success: false,
           error: 'JIT 权限不可用（RWX mmap 被拒绝）。请确认已申请 ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY 权限并使用 debug 签名。'
         };
+      }
+
+      // 同步上游 FCL 1.3.4.0/1.3.4.1：按游戏版本修补 FML 早期加载屏配置
+      // 26.3+ 写入 earlyWindowControl = false（避免 gralloc 争用导致 UI 冻死）
+      // 26.3 以下清除残留键（恢复 Forge 模组加载进度动画）
+      try {
+        const hasFml = FmlConfigPatcher.detectFml(config.gameDir, config.version);
+        FmlConfigPatcher.patch(config.gameDir, config.version, hasFml);
+      } catch (err) {
+        hilog.warn(0x0000, TAG, `fml.toml patch skipped: ${err}`);
       }
 
       // 构建命令行（native 侧解析 -Xmx / -cp / 主类 / --gameDir）

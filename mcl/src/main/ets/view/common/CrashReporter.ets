@@ -4,6 +4,7 @@
  * 捕获未处理异常、生成崩溃报告、提供分享功能
  */
 import { FileUtils } from '../../core/util/FileUtils';
+import { AppVersion } from '../../core/util/AppVersion';
 import { AppContext } from '../../common/AppContext';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -69,7 +70,7 @@ export class CrashReporter {
 
     const report: CrashReport = {
       timestamp: new Date().toISOString(),
-      appVersion: '1.0.0',
+      appVersion: AppVersion.VERSION_NAME,
       deviceInfo: `${deviceInfo.deviceType} / ${deviceInfo.marketName}`,
       stackTrace: error.stack ?? error.message,
       logLines: [...this.crashLogs].slice(-50), // 最近 50 行

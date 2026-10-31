@@ -5,7 +5,7 @@
  * GameLauncherService → native.launchJVM(renderer) 激活 AMCL GraphicsPlan。
  */
 import { SettingsManager, LauncherSettings } from '../../core/SettingsManager';
-import { NavigationService } from '../../common/NavigationRouter';
+import { NavigationService, RouteNames } from '../../common/NavigationRouter';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'FCL-RendererPage';
@@ -17,6 +17,8 @@ class RendererOption {
   desc: string = '';
   badge: string = '';
   recommended: boolean = false;
+  /** 是否提供齿轮入口（上游 FCL 1.3.4.3：内置渲染器行尾齿轮配置） */
+  configurable: boolean = false;
 }
 
 function makeOptions(): Array<RendererOption> {
@@ -31,9 +33,10 @@ function makeOptions(): Array<RendererOption> {
   const mg = new RendererOption();
   mg.value = 'mobileglues';
   mg.name = 'MobileGlues';
-  mg.desc = 'OpenGL → GLES 3.2 翻译层。兼容性最好，AMCL 真机全链路验证（1.20.4）。需 NEED_OPENGL=1（已内置）';
+  mg.desc = 'OpenGL → GLES 翻译层。兼容性最好，AMCL 真机全链路验证（1.20.4）。需 NEED_OPENGL=1（已内置）。行尾齿轮可配置 MobileGlues 全量运行时选项';
   mg.badge = '推荐';
   mg.recommended = true;
+  mg.configurable = true;
   list.push(mg);
 
   const mgl = new RendererOption();
@@ -49,17 +52,9 @@ function makeOptions(): Array<RendererOption> {
   gl4es.desc = 'OpenGL → GLES 翻译（legacy 路径，LWJGL2 时代版本适用）';
   list.push(gl4es);
 
-  const virgl = new RendererOption();
-  virgl.value = 'virgl';
-  virgl.name = 'VirGL';
-  virgl.desc = '虚拟 GPU 渲染（实验性，本架构下未验证）';
-  list.push(virgl);
-
-  const zink = new RendererOption();
-  zink.value = 'zink';
-  zink.name = 'Zink';
-  zink.desc = 'OpenGL over Vulkan（实验性，AMCL 已退役该路径，保留兼容）';
-  list.push(zink);
+  // 上游 FCL 1.3.4.3：OSMesa 已从内置剥离为渲染器插件（不再随包内置），
+  // VirGL / Freedreno 内置条目同样移除。Next 侧未实现对应插件，故不再列出，
+  // 避免选择后被静默回退到 MobileGlues 基线。
 
   return list;
 }
@@ -136,6 +131,16 @@ export struct RendererPage {
                     }
                   })
                   .radioStyle({ checkedBackgroundColor: '#4CAF50' })
+
+                if (opt.configurable) {
+                  Text('⚙')
+                    .fontSize(18)
+                    .fontColor('#8899AA')
+                    .padding({ left: 12 })
+                    .onClick(() => {
+                      NavigationService.push(RouteNames.MG_OPTIONS);
+                    })
+                }
               }
               .width('100%')
               .padding(14)

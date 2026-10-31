@@ -11,6 +11,7 @@ import { WorldManagePage } from '../view/manage/WorldManagePage';
 import { AboutPage } from '../view/setting/AboutPage';
 import { JavaManagePage } from '../view/setting/JavaManagePage';
 import { ControlEditor } from '../view/control/ControlEditor';
+import { MgOptionsPage } from '../view/setting/MgOptionsPage';
 
 export class RouteNames {
   static readonly MAIN = 'main';
@@ -30,6 +31,7 @@ export class RouteNames {
   static readonly CONTROL_EDITOR = 'controlEditor';
   static readonly GAME = 'game';
   static readonly RENDERER = 'renderer';
+  static readonly MG_OPTIONS = 'mgOptions';
 }
 
 @Builder
@@ -52,6 +54,8 @@ export function buildRoutePage(name: string, param: ESObject): void {
     FileBrowser({ config: (param as FileBrowserConfig) ?? defaultFileBrowserConfig });
   } else if (name === RouteNames.CONTROL_EDITOR) {
     ControlEditor();
+  } else if (name === RouteNames.MG_OPTIONS) {
+    MgOptionsPage();
   }
 }
 

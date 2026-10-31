@@ -27,15 +27,13 @@ export { ThemeEngine, AccentColor, DarkPalette, LightPalette } from './ThemeEngi
 
 // ── 工具 ──
 export { Constants } from './util/Constants';
+export { AppVersion } from './util/AppVersion';
 export { FileUtils } from './util/FileUtils';
 export { uuidv4, offlinePlayerUUID } from './util/UUIDUtils';
 export { Architecture, ArchType } from './util/Architecture';
 
 // ── 输入 ──
 export { KeyCodeConverter, AWTKeyCode, GLFWKeyCode } from './input/KeyCodes';
-
-// ── 更新 ──
-export { UpdateChecker } from './upgrade/UpdateChecker';
 
 // ── 服务 ──
 export { GameLauncherService } from '../service/GameLauncherService';

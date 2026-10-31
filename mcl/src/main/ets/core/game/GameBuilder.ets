@@ -6,6 +6,7 @@
  */
 import { GameVersion, LaunchConfig, Library, ModLoaderType } from './GameTypes';
 import { Constants } from '../util/Constants';
+import { AppVersion } from '../util/AppVersion';
 import { FileUtils } from '../util/FileUtils';
 import { LibraryAnalyzer } from './LibraryAnalyzer';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -94,8 +95,8 @@ export class GameBuilder {
 
     // Minecraft 属性
     args.push(`-Dminecraft.client.jar=${mcDir}/versions/${config.version}/${config.version}.jar`);
-    args.push(`-Dminecraft.launcher.brand=FCL-HarmonyOS`);
-    args.push(`-Dminecraft.launcher.version=1.0.0`);
+    args.push(`-Dminecraft.launcher.brand=${AppVersion.BRAND}`);
+    args.push(`-Dminecraft.launcher.version=${AppVersion.VERSION_NAME}`);
 
     // 日志
     args.push('-Dlog4j2.formatMsgNoLookups=true');

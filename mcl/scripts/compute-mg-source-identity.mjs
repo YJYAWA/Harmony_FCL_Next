@@ -13,6 +13,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   writeFileSync,
@@ -136,22 +137,96 @@ function parseRecursiveSubmodules(repo) {
   return { output, modules };
 }
 
+function isGitRoot(repository) {
+  try {
+    const topLevel = resolve(String(runGit(
+      repository,
+      ['rev-parse', '--show-toplevel'],
+      'utf8',
+    )).trim());
+    return process.platform === 'win32'
+      ? topLevel.toLowerCase() === repository.toLowerCase()
+      : topLevel === repository;
+  } catch {
+    return false;
+  }
+}
+
+function listTreeFiles(root) {
+  const files = [];
+  const walk = (directory) => {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === '.git') continue;
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        files.push(fullPath);
+      }
+    }
+  };
+  walk(root);
+  return files.sort();
+}
+
+// Vendored layout: the MobileGlues tree is committed inside this repository as
+// plain files instead of being a nested clone. Git therefore reports the
+// enclosing repository as the toplevel, and there is no submodule metadata to
+// hash. Fall back to a deterministic content address over the tree itself so
+// that two different source trees can never claim the same build identity.
+function computeVendoredIdentity(hash, repository) {
+  const files = listTreeFiles(repository);
+  frame(hash, 'layout', 'vendored');
+  frame(hash, 'file-count', files.length);
+  for (const file of files) {
+    const relativePath = relative(repository, file).replaceAll('\\', '/');
+    frame(hash, 'file-path', relativePath);
+    frame(hash, 'file-bytes', readFileSync(file));
+  }
+  return {
+    head: 'vendored',
+    dirty: false,
+    status: '',
+    untrackedFiles: 0,
+    fileCount: files.length,
+  };
+}
+
 export function computeMgSourceIdentity({ repo, options = {} }) {
   if (!repo) throw new Error('MobileGlues repository path is required');
   const repository = resolve(repo);
-  const topLevel = resolve(String(runGit(
-    repository,
-    ['rev-parse', '--show-toplevel'],
-    'utf8',
-  )).trim());
-  if (process.platform === 'win32'
-    ? topLevel.toLowerCase() !== repository.toLowerCase()
-    : topLevel !== repository) {
-    throw new Error(`Expected repository root ${repository}, Git reports ${topLevel}`);
-  }
 
   const sourceHash = createHash('sha256');
   frame(sourceHash, 'schema', MG_SOURCE_IDENTITY_SCHEMA);
+
+  if (!isGitRoot(repository)) {
+    const vendored = computeVendoredIdentity(sourceHash, repository);
+    const optionsHash = createHash('sha256');
+    frame(optionsHash, 'schema', MG_SOURCE_IDENTITY_SCHEMA);
+    for (const [name, value] of normalizeOptions(options)) frame(optionsHash, name, value);
+    const optionsSha256 = optionsHash.digest('hex');
+    const worktreeSha256 = sourceHash.digest('hex');
+    return {
+      schemaVersion: MG_SOURCE_IDENTITY_SCHEMA,
+      sourceCommit: vendored.head,
+      worktreeSha256,
+      worktreeDirty: false,
+      worktreeState: 'clean',
+      buildOptionsSha256: optionsSha256,
+      buildIdentity: [
+        `schema=${MG_SOURCE_IDENTITY_SCHEMA}`,
+        `source=vendored`,
+        `worktree=${worktreeSha256}`,
+        `state=clean`,
+        `options=${optionsSha256}`,
+      ].join(':'),
+      dirtyStatusSha256: null,
+      untrackedFileCount: 0,
+      options: Object.fromEntries(normalizeOptions(options)),
+    };
+  }
+
   const rootContent = appendRepositoryContent(sourceHash, repository, '.');
 
   const recursive = parseRecursiveSubmodules(repository);

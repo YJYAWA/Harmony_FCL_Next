@@ -16,7 +16,9 @@ import { GameLogViewer } from '../view/common/GameLogViewer';
 import { CrashReportView } from '../view/common/CrashReporter';
 import { GamePage } from '../view/game/GamePage';
 import { RendererPage } from '../view/setting/RendererPage';
+import { MgOptionsPage } from '../view/setting/MgOptionsPage';
 import { NavigationService, RouteNames } from '../common/NavigationRouter';
+import { AppVersion } from '../core/util/AppVersion';
 
 @Entry
 @ComponentV2
@@ -86,6 +88,8 @@ struct Index {
       GamePage()
     } else if (name === RouteNames.RENDERER) {
       RendererPage()
+    } else if (name === RouteNames.MG_OPTIONS) {
+      MgOptionsPage()
     }
   }
 
@@ -107,7 +111,7 @@ struct Index {
 
         Blank()
 
-        Text('v1.0.0').fontSize(11).fontColor('#555555').padding(16)
+        Text(`v${AppVersion.VERSION_NAME}`).fontSize(11).fontColor('#555555').padding(16)
       }
       .width(260).height('100%').backgroundColor('#16213E')
 
