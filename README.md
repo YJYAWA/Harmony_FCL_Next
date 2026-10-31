@@ -43,7 +43,8 @@ MobileGlues / MobileGL 渲染器、OpenAL 音频）移植进来，使这个启�
 |---|---|
 | bundleName | `com.harmony.fcl` |
 | 应用名 | HarmonyFCL_Next |
-| 版本 | 1.0.0 (1000000) |
+| 版本 | 1.3.1.9-next.1 (1030109) |
+| 对应上游 | FCL **1.3.1.9**（2026-07-18 release；ArkTS 移植快照取自 2026-07-24 的 main） |
 | SDK | HarmonyOS 6.1.1（API 24） |
 | 架构 | arm64-v8a |
 | 关键权限 | `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（ACL，JIT 必需） |
