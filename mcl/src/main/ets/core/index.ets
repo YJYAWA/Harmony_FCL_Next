@@ -43,6 +43,12 @@ export { StorageManager } from './storage/StorageManager';
 // ── 归档导入导出 ──
 export { GameArchiveIO, ImportResult, BatchImportResult, ImportFailure } from './archive/GameArchiveIO';
 
+// ── 整合包 ──
+export { ModpackType, ModpackManifest, ModpackFileEntry, ModpackLibrary,
+  detectModpackType, parseModpackManifest } from './modpack/ModpackManifest';
+export { ModpackInstaller, ModpackInstallResult, ModpackProgress, ModpackConfig }
+  from './modpack/ModpackInstaller';
+
 // ── 工具 ──
 export { Constants } from './util/Constants';
 export { AppVersion } from './util/AppVersion';

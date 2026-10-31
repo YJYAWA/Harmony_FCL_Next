@@ -43,17 +43,20 @@ export class FmlConfigPatcher {
 
   /**
    * 按游戏版本修补 fml.toml
-   * @param gameDir 游戏目录（fml.toml 位于 <gameDir>/config/fml.toml）
+   * @param gameDir 游戏目录（版本 JSON 位于 <gameDir>/versions/<id>/）
    * @param versionId 游戏版本 ID
    * @param hasFml 是否为 FML 系（Forge / NeoForge）版本
+   * @param configDir 配置目录（fml.toml 所在），整合包实例隔离时传实例目录；缺省用 gameDir
    * @returns 是否发生了实际改动
    */
-  static patch(gameDir: string, versionId: string, hasFml: boolean): boolean {
+  static patch(gameDir: string, versionId: string, hasFml: boolean,
+    configDir?: string): boolean {
     if (!hasFml) {
       return false;
     }
 
-    const configPath = `${gameDir}/config/fml.toml`;
+    const targetDir = configDir ?? gameDir;
+    const configPath = `${targetDir}/config/fml.toml`;
     const shouldDisable = FmlConfigPatcher.isAtLeast263(versionId);
 
     if (!shouldDisable) {

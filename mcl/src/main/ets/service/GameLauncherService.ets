@@ -98,6 +98,8 @@ export class GameLauncherService {
   buildLaunchCommand(config: LaunchConfig, version: GameVersion): string[] {
     const args: string[] = [];
     const mcDir = config.gameDir;
+    // 实例目录（整合包隔离）：mods / config / saves 等写这里；未设置时就是 gameDir
+    const instanceDir = config.instanceDir ?? config.gameDir;
 
     // 1. Java 可执行文件路径
     args.push(config.javaPath);
@@ -116,7 +118,7 @@ export class GameLauncherService {
 
     // 3. 版本 JSON 中声明的 JVM 参数 (arguments.jvm)
     //    过滤掉 -cp / -Djava.library.path / -XstartOnFirstThread (由启动器自行管理)
-    const placeholders = this.buildPlaceholders(config, version, mcDir);
+    const placeholders = this.buildPlaceholders(config, version, mcDir, instanceDir);
     const versionJvmArgs = VersionArguments.filterJvmArgs(version.arguments?.jvm ?? []);
     for (const raw of versionJvmArgs) {
       args.push(VersionArguments.expand(raw, placeholders));
@@ -145,7 +147,7 @@ export class GameLauncherService {
     args.push(this.getMainClass(config, version));
 
     // 9. 游戏参数
-    for (const gameArg of this.buildGameArgs(config, version, mcDir, placeholders)) {
+    for (const gameArg of this.buildGameArgs(config, version, instanceDir, placeholders)) {
       args.push(gameArg);
     }
 
@@ -155,8 +157,8 @@ export class GameLauncherService {
   /**
    * 构建启动参数占位符表
    */
-  private buildPlaceholders(config: LaunchConfig, version: GameVersion, mcDir: string):
-    Map<string, string> {
+  private buildPlaceholders(config: LaunchConfig, version: GameVersion, mcDir: string,
+    instanceDir: string): Map<string, string> {
     const map: Map<string, string> = new Map();
     map.set('auth_player_name', config.authUsername);
     map.set('auth_uuid', config.authUUID);
@@ -165,7 +167,8 @@ export class GameLauncherService {
     map.set('auth_xuid', '');
     map.set('clientid', '');
     map.set('version_name', config.version);
-    map.set('game_directory', mcDir);
+    // game_directory 指向实例目录（整合包隔离：mods / config / saves 在此）
+    map.set('game_directory', instanceDir);
     map.set('assets_root', `${mcDir}/assets`);
     map.set('game_assets', `${mcDir}/assets/virtual/legacy`);
     map.set('assets_index_name', version.assetIndex?.id ?? config.version);
@@ -238,7 +241,7 @@ export class GameLauncherService {
    * 优先使用版本 JSON 的 arguments.game (含条件对象求值),
    * 老版本 (无 arguments.game) 走手工参数
    */
-  private buildGameArgs(config: LaunchConfig, version: GameVersion, mcDir: string,
+  private buildGameArgs(config: LaunchConfig, version: GameVersion, instanceDir: string,
     placeholders: Map<string, string>): string[] {
     const args: string[] = [];
 
@@ -251,8 +254,9 @@ export class GameLauncherService {
       // 老版本参数格式
       args.push('--username', config.authUsername);
       args.push('--version', config.version);
-      args.push('--gameDir', mcDir);
-      args.push('--assetsDir', `${mcDir}/assets`);
+      args.push('--gameDir', instanceDir);
+      // assets 与 libraries 始终共享 gameDir（不随实例隔离）
+      args.push('--assetsDir', `${config.gameDir}/assets`);
       args.push('--assetIndex', version.assetIndex?.id ?? config.version);
       args.push('--uuid', config.authUUID);
       args.push('--accessToken', config.authAccessToken);
@@ -352,8 +356,10 @@ export class GameLauncherService {
       // 26.3+ 写入 earlyWindowControl = false（避免 gralloc 争用导致 UI 冻死）
       // 26.3 以下清除残留键（恢复 Forge 模组加载进度动画）
       try {
+        // fml.toml 写在实例目录（整合包隔离），版本 JSON 仍从 gameDir 读
+        const instanceDir = config.instanceDir ?? config.gameDir;
         const hasFml = FmlConfigPatcher.detectFml(config.gameDir, config.version);
-        FmlConfigPatcher.patch(config.gameDir, config.version, hasFml);
+        FmlConfigPatcher.patch(config.gameDir, config.version, hasFml, instanceDir);
       } catch (err) {
         hilog.warn(0x0000, TAG, `fml.toml patch skipped: ${err}`);
       }

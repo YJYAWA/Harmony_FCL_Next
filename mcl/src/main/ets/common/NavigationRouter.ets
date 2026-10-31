@@ -12,6 +12,7 @@ import { AboutPage } from '../view/setting/AboutPage';
 import { JavaManagePage } from '../view/setting/JavaManagePage';
 import { ControlEditor } from '../view/control/ControlEditor';
 import { MgOptionsPage } from '../view/setting/MgOptionsPage';
+import { ModpackInstallPage } from '../view/modpack/ModpackInstallPage';
 
 export class RouteNames {
   static readonly MAIN = 'main';
@@ -32,6 +33,7 @@ export class RouteNames {
   static readonly GAME = 'game';
   static readonly RENDERER = 'renderer';
   static readonly MG_OPTIONS = 'mgOptions';
+  static readonly MODPACK_INSTALL = 'modpackInstall';
 }
 
 @Builder
@@ -56,6 +58,8 @@ export function buildRoutePage(name: string, param: ESObject): void {
     ControlEditor();
   } else if (name === RouteNames.MG_OPTIONS) {
     MgOptionsPage();
+  } else if (name === RouteNames.MODPACK_INSTALL) {
+    ModpackInstallPage();
   }
 }
 

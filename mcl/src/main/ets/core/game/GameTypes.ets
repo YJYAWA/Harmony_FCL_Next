@@ -128,8 +128,16 @@ export interface LaunchConfig {
   modLoader?: ModLoaderType;
   /** 模组加载器版本 */
   modLoaderVersion?: string;
-  /** 游戏目录 */
+  /** 游戏目录（根，含 versions / libraries / assets） */
   gameDir: string;
+  /**
+   * 实例目录（可选）
+   *
+   * 整合包实例隔离用：对应上游 FCL 的 `VersionSetting.setIsolateGameDir(true)`。
+   * 设置后 mods / config / saves 等写入该目录而非 gameDir 根，
+   * 避免多个整合包互相污染。版本 JSON 与 libraries 仍共享 gameDir。
+   */
+  instanceDir?: string;
   /** Java 运行时路径 */
   javaPath: string;
   /** 最小内存 (MB) */

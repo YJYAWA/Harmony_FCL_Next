@@ -15,6 +15,7 @@ import { FileUtils } from '../../core/util/FileUtils';
 import { SettingsManager } from '../../core/SettingsManager';
 import { GameLauncherService } from '../../service/GameLauncherService';
 import { NavigationService, RouteNames } from '../../common/NavigationRouter';
+import { ModpackInstaller } from '../../core/modpack/ModpackInstaller';
 import { promptAction } from '@kit.ArkUI';
 
 /** 版本 Profile 条目 */
@@ -109,12 +110,29 @@ export struct VersionsPage {
     this.loadVersions();
   }
 
+  /**
+   * 版本卡片副标题：整合包显示整合包名，其余显示 Installed。
+   * 对应 FCL 的版本列表标识整合包的方式。
+   */
+  versionLabel(versionId: string): string {
+    const dir = `${FileUtils.getVersionsDir()}/${versionId}`;
+    const config = ModpackInstaller.readConfig(dir);
+    if (config) {
+      return `Modpack · ${config.name}`;
+    }
+    return 'Installed';
+  }
+
   build() {
     Stack() {
       Column() {
         Row() {
           Text('Version & Profiles').fontSize(24).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
           Blank()
+          Button('Modpack').fontSize(13).fontColor('#FFFFFF').backgroundColor('#0F3460')
+            .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .margin({ right: 8 })
+            .onClick(() => { NavigationService.push(RouteNames.MODPACK_INSTALL); })
           Button('+ Profile').fontSize(14).fontColor('#FFFFFF').backgroundColor('#E94560')
             .borderRadius(8).padding({ left: 16, right: 16, top: 8, bottom: 8 })
             .onClick(() => { this.showAddDialog = true; })
@@ -213,8 +231,9 @@ export struct VersionsPage {
             Text('★').fontSize(14).fontColor('#FFD700').margin({ right: 6 })
           }
           Text(versionId).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#FFFFFF')
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         }
-        Text('Installed').fontSize(12).fontColor('#4CAF50').margin({ top: 2 })
+        Text(this.versionLabel(versionId)).fontSize(12).fontColor('#4CAF50').margin({ top: 2 })
       }
       .alignItems(HorizontalAlign.Start).layoutWeight(1)
 
@@ -419,6 +438,11 @@ export struct VersionsPage {
 
   async launchVersion(versionId: string): Promise<void> {
     const config: LaunchConfig = await LaunchConfigFactory.create(versionId);
+    // 整合包实例隔离：mods/config/saves 指向该整合包的独立实例目录
+    const config2 = ModpackInstaller.readConfig(`${FileUtils.getVersionsDir()}/${versionId}`);
+    if (config2 && config2.instanceDir.length > 0) {
+      config.instanceDir = config2.instanceDir;
+    }
     GameLauncherService.getInstance().launchGame(config).then(r => {
       promptAction.showToast({ message: r.success ? 'Game started!' : `Failed: ${r.error}` });
     });
