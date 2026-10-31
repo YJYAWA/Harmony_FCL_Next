@@ -17,9 +17,11 @@
 | 安装器子进程 | fork + 真实 JVM（纯 C 解析 jar manifest 取 Main-Class），替换上游的伪造成功 |
 | ArkTS 修复 | 上游 51 个严格模式编译错误清零，`hvigorw assembleHap` 一键出包 |
 | 上游同步 | 跟进 FCL 1.3.4.0–1.3.4.3：FML `earlyWindowControl` 版本分流修复、MobileGlues 运行时选项齿轮配置、OSMesa/VirGL 内置渲染器剥离（对应条目移除） |
+| 整合包安装 | 移植 FCL 整合包体系：MCBBS / CurseForge / Modrinth / HMCL / MultiMC / 手工包六种格式识别与安装，整合包之间**实例隔离**（`mods`/`config`/`saves` 各自独立，版本与库共享），加载器（Forge/Fabric）随包自动安装 |
+| 权限与存储 | 鸿蒙权限合规：导入导出全走 `DocumentViewPicker`（用户显式授权，无需 `READ/WRITE_IMAGEVIDEO`）；游戏数据可放公共下载目录（卸载不丢），手机端走 picker 学路径，平板端运行时申请 `READ_WRITE_DOWNLOAD_DIRECTORY` |
 | 无更新提示 | 彻底移除应用内更新检查与更新提示（`core/upgrade/UpdateChecker` 已删除），启动器不再联网查询上游 Release |
 | 关键适配 | 移除 AMCL 的 `-Djava.system.class.loader=AmclClassLoader`（FCL 无 amcl-launcher.jar，注入必炸 `JNI_CreateJavaVM`） |
-| 应用身份 | 包名 `com.harmony.fcl`、应用名 HarmonyFCL_Next、版本 `1.3.4.3-next.1` |
+| 应用身份 | 包名 `com.harmony.fcl`、应用名 HarmonyFCL_Next、版本 `1.3.4.3-next.2` |
 
 ## 应用身份
 
@@ -27,7 +29,7 @@
 |---|---|
 | bundleName | `com.harmony.fcl` |
 | 应用名 | HarmonyFCL_Next |
-| 版本 | 1.3.4.3-next.1 (1030403)，对应 FCL 上游 1.3.4.3 |
+| 版本 | 1.3.4.3-next.2 (1030404)，对应 FCL 上游 1.3.4.3 |
 | SDK | HarmonyOS 6.1.1（API 24） |
 | 架构 | arm64-v8a |
 | 关键权限 | `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（ACL，JIT 必需） |

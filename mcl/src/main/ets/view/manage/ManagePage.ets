@@ -6,12 +6,21 @@ import { ResourceManager, ManagedItemType, ManagedItem }
   from '../../core/game/ModManager';
 import { FileUtils } from '../../core/util/FileUtils';
 import { GameArchiveIO } from '../../core/archive/GameArchiveIO';
+import { ModpackInstaller, ModpackConfig } from '../../core/modpack/ModpackInstaller';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 
 /** 各资源类型的允许扩展名（与 picker 的 fileSuffixFilters 对应） */
 const MOD_EXTENSIONS: string[] = ['.jar'];
 const ZIP_EXTENSIONS: string[] = ['.zip'];
+
+/** 可切换的实例（整合包隔离实例） */
+interface InstanceEntry {
+  /** 显示名 */
+  label: string;
+  /** 实例目录；空 = 全局 gameDir */
+  dir: string;
+}
 
 /** 管理页顶部标签 */
 interface ManagedTab {
@@ -27,6 +36,8 @@ export struct ManagePage {
   @Local searchQuery: string = '';
   @Local showDeleteConfirm: boolean = false;
   @Local deleteTarget: ManagedItem | null = null;
+  @Local instances: InstanceEntry[] = [];
+  @Local selectedInstance: string = '';
 
   private readonly tabs: ManagedTab[] = [
     { type: ManagedItemType.MOD, label: 'Mods' },
@@ -37,12 +48,35 @@ export struct ManagePage {
   ];
 
   aboutToAppear(): void {
+    this.loadInstances();
     this.loadItems();
+  }
+
+  /** 列出所有整合包实例，供切换查看其 mods/config/saves */
+  loadInstances(): void {
+    const list: InstanceEntry[] = [{ label: 'Default (global)', dir: '' }];
+    const versionsDir = `${FileUtils.getMinecraftDir()}/versions`;
+    const ids = FileUtils.listFiles(versionsDir);
+    for (const id of ids) {
+      const config: ModpackConfig | null = ModpackInstaller.readConfig(`${versionsDir}/${id}`);
+      if (config && config.instanceDir.length > 0) {
+        list.push({ label: config.name, dir: config.instanceDir });
+      }
+    }
+    this.instances = list;
+    if (this.selectedInstance.length === 0 && list.length > 0) {
+      this.selectedInstance = list[0].dir;
+    }
+  }
+
+  /** 当前选中的实例目录（空 = 全局） */
+  private currentInstanceDir(): string {
+    return this.selectedInstance;
   }
 
   loadItems(): void {
     this.isLoading = true;
-    this.items = ResourceManager.listItems(this.selectedType);
+    this.items = ResourceManager.listItems(this.selectedType, this.currentInstanceDir());
 
     if (this.searchQuery.trim()) {
       const q = this.searchQuery.toLowerCase();
@@ -60,6 +94,11 @@ export struct ManagePage {
 
         // 搜索和操作
         this.buildToolbar();
+
+        // 实例切换（整合包实例隔离）
+        if (this.instances.length > 1) {
+          this.buildInstanceBar();
+        }
 
         // 统计
         Row() {
@@ -147,6 +186,31 @@ export struct ManagePage {
     .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 4 })
   }
 
+  /** 实例切换栏：整合包实例与全局目录之间切换 */
+  @Builder
+  buildInstanceBar() {
+    Scroll() {
+      Row() {
+        ForEach(this.instances, (inst: InstanceEntry) => {
+          Text(inst.label)
+            .fontSize(12)
+            .fontColor(this.selectedInstance === inst.dir ? '#FFFFFF' : '#999999')
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .backgroundColor(this.selectedInstance === inst.dir ? '#E94560' : '#16213E')
+            .borderRadius(14)
+            .margin({ right: 6 })
+            .onClick(() => {
+              this.selectedInstance = inst.dir;
+              this.loadItems();
+            })
+        })
+      }
+      .width('auto')
+    }
+    .width('100%').padding({ left: 16, right: 16, top: 4, bottom: 8 })
+    .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+  }
+
   @Builder
   buildItemCard(item: ManagedItem) {
     Row() {
@@ -208,7 +272,7 @@ export struct ManagePage {
    */
   private async importResources(): Promise<void> {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const targetDir = ResourceManager.getDirectory(this.selectedType);
+    const targetDir = ResourceManager.getDirectory(this.selectedType, this.currentInstanceDir());
     const exts = this.selectedType === ManagedItemType.MOD ? MOD_EXTENSIONS : ZIP_EXTENSIONS;
     try {
       const result = await GameArchiveIO.importResourceFiles(ctx, targetDir, exts);

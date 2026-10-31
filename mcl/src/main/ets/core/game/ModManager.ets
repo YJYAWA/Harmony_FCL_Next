@@ -81,9 +81,13 @@ export interface FileStatInfo {
  * 资源管理器
  */
 export class ResourceManager {
-  /** 获取指定类型的目录 */
-  static getDirectory(type: ManagedItemType): string {
-    const mcDir = FileUtils.getMinecraftDir();
+  /**
+   * 获取指定类型的目录
+   * @param type 资源类型
+   * @param instanceDir 可选的实例目录（整合包隔离用）；缺省用全局 gameDir
+   */
+  static getDirectory(type: ManagedItemType, instanceDir?: string): string {
+    const mcDir = instanceDir ?? FileUtils.getMinecraftDir();
     switch (type) {
       case ManagedItemType.MOD:
         return `${mcDir}/${Constants.MODS_DIR}`;
@@ -101,8 +105,8 @@ export class ResourceManager {
   }
 
   /** 列出所有项 */
-  static listItems(type: ManagedItemType): ManagedItem[] {
-    const dir = ResourceManager.getDirectory(type);
+  static listItems(type: ManagedItemType, instanceDir?: string): ManagedItem[] {
+    const dir = ResourceManager.getDirectory(type, instanceDir);
 
     if (!FileUtils.exists(dir)) {
       FileUtils.mkdirs(dir);
