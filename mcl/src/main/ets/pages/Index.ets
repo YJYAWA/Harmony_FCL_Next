@@ -15,6 +15,7 @@ import { ControlEditor } from '../view/control/ControlEditor';
 import { GameLogViewer } from '../view/common/GameLogViewer';
 import { CrashReportView } from '../view/common/CrashReporter';
 import { GamePage } from '../view/game/GamePage';
+import { RendererPage } from '../view/setting/RendererPage';
 import { NavigationService, RouteNames } from '../common/NavigationRouter';
 
 @Entry
@@ -83,6 +84,8 @@ struct Index {
       ControlEditor()
     } else if (name === RouteNames.GAME) {
       GamePage()
+    } else if (name === RouteNames.RENDERER) {
+      RendererPage()
     }
   }
 

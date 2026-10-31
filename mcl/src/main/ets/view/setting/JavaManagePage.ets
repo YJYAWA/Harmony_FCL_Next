@@ -8,6 +8,7 @@ import { FileUtils } from '../../core/util/FileUtils';
 import { AppContext } from '../../common/AppContext';
 import { SettingsManager } from '../../core/SettingsManager';
 import { Architecture } from '../../core/util/Architecture';
+import { NavigationService, RouteNames } from '../../common/NavigationRouter';
 import { promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -24,41 +25,16 @@ interface JavaRuntime {
   isAutoDetected: boolean;
 }
 
-/** 渲染器类型 */
-enum Renderer {
-  AUTO = 'auto',
-  MOBILEGLUES = 'mobileglues',
-  MOBILEGL = 'mobilegl',
-  VIRGL = 'virgl',
-  ZINK = 'zink',
-  MESA = 'mesa',
-  GL4ES = 'gl4es'
-}
-
-/** 渲染器选项 */
-interface RendererOption {
-  v: Renderer;
-  l: string;
-  d: string;
-}
+/** 渲染器选择 UI 已迁移至 RendererPage（Navigation 路由 'renderer'） */
 
 @ComponentV2
 export struct JavaManagePage {
   @Local javaRuntimes: JavaRuntime[] = [];
   @Local selectedJava: string = '';
-  @Local selectedRenderer: Renderer = Renderer.AUTO;
   @Local showAddDialog: boolean = false;
   @Local searchPath: string = '';
 
   private settings: SettingsManager = SettingsManager.getInstance();
-  private readonly rendererOptions: RendererOption[] = [
-    { v: Renderer.AUTO, l: 'Auto-detect', d: 'Automatically select best renderer' },
-    { v: Renderer.MOBILEGLUES, l: 'MobileGlues', d: 'OpenGL→GLES 3.2 translation (AMCL verified, default for 1.20.x)' },
-    { v: Renderer.MOBILEGL, l: 'MobileGL', d: 'DirectVulkan renderer (required for MC 26.3+, libmobilegl.so)' },
-    { v: Renderer.GL4ES, l: 'GL4ES', d: 'OpenGL→GLES translation (legacy, LWJGL2 path)' },
-    { v: Renderer.VIRGL, l: 'VirGL', d: 'Virtual GPU (best performance)' },
-    { v: Renderer.ZINK, l: 'Zink', d: 'OpenGL over Vulkan (experimental)' }
-  ];
 
   aboutToAppear(): void {
     this.loadRuntimes();
@@ -128,17 +104,22 @@ export struct JavaManagePage {
             .margin({ top: 16 }).width('100%')
             .onClick(() => { this.showAddDialog = true; })
 
-          // 渲染器选择
+          // 渲染器管理（独立页面，与 FCL/HarmonyFCL 一致的选择体验）
           this.buildSection('Renderer');
-          Text('Select the OpenGL rendering backend')
-            .fontSize(12).fontColor('#666666').margin({ bottom: 8 })
-
-          ForEach(
-            this.rendererOptions,
-            (item: RendererOption) => {
-              this.buildRendererCard(item.v, item.l, item.d);
+          Row() {
+            Column() {
+              Text('渲染器管理').fontSize(15).fontColor('#FFFFFF')
+              Text('MobileGlues / MobileGL (MC 26.3+) / GL4ES …').fontSize(11).fontColor('#999999').margin({ top: 2 })
             }
-          )
+            .alignItems(HorizontalAlign.Start).layoutWeight(1)
+
+            Text('›').fontSize(20).fontColor('#666666')
+          }
+          .width('100%').padding(12).backgroundColor('#16213E').borderRadius(8)
+          .margin({ bottom: 6 })
+          .onClick(() => {
+            NavigationService.push(RouteNames.RENDERER);
+          })
 
           // 下载提示
           this.buildSection('Download JDK');
@@ -193,28 +174,5 @@ export struct JavaManagePage {
     .width('100%').padding(12).backgroundColor('#16213E').borderRadius(8)
     .margin({ bottom: 6 })
   }
-
-  @Builder
-  buildRendererCard(value: Renderer, label: string, desc: string) {
-    Row() {
-      Column() {
-        Text(label).fontSize(15).fontColor(this.selectedRenderer === value ? '#4CAF50' : '#FFFFFF')
-        Text(desc).fontSize(11).fontColor('#999999').margin({ top: 2 })
-      }
-      .alignItems(HorizontalAlign.Start).layoutWeight(1)
-
-      Radio({ value, group: 'renderer' })
-        .checked(this.selectedRenderer === value)
-        .onChange((checked: boolean) => {
-          if (checked) {
-            this.selectedRenderer = value;
-            // 持久化渲染器选择（GameLauncherService 启动时读取并写入启动环境）
-            AppStorage.setOrCreate('fcl.renderer', value as string);
-            hilog.info(0x0000, TAG, `Renderer selected: ${value}`);
-          }
-        })
-    }
-    .width('100%').padding(12).backgroundColor('#16213E').borderRadius(8)
-    .margin({ bottom: 6 })
-  }
 }
+

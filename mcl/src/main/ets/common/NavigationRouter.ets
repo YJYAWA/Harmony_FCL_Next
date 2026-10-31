@@ -29,6 +29,7 @@ export class RouteNames {
   static readonly JAVA_MANAGE = 'javaManage';
   static readonly CONTROL_EDITOR = 'controlEditor';
   static readonly GAME = 'game';
+  static readonly RENDERER = 'renderer';
 }
 
 @Builder

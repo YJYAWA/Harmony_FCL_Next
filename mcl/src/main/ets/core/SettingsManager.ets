@@ -49,6 +49,8 @@ export interface LauncherSettings {
   javaPath: string;
   gameDir: string;
   extraJVMArgs: string;
+  /** 渲染器：mobileglues(默认) / mobilegl(MC 26.3+) / gl4es / auto */
+  renderer: string;
 
   // 窗口
   windowWidth: number;
@@ -77,6 +79,7 @@ class SettingsData implements LauncherSettings {
   javaPath: string = '';
   gameDir: string = '';
   extraJVMArgs: string = '';
+  renderer: string = 'mobileglues';
   windowWidth: number = 854;
   windowHeight: number = 480;
   fullscreen: boolean = false;
@@ -102,6 +105,7 @@ const DEFAULT_SETTINGS: LauncherSettings = {
   javaPath: '',
   gameDir: '',
   extraJVMArgs: '',
+  renderer: 'mobileglues',
 
   windowWidth: 854,
   windowHeight: 480,
@@ -132,6 +136,7 @@ export class SettingsManager {
     c.downloadSource = s.downloadSource; c.downloadConcurrency = s.downloadConcurrency; c.downloadThreads = s.downloadThreads;
     c.language = s.language; c.maxMemory = s.maxMemory; c.minMemory = s.minMemory;
     c.javaPath = s.javaPath; c.gameDir = s.gameDir; c.extraJVMArgs = s.extraJVMArgs;
+    c.renderer = s.renderer;
     c.windowWidth = s.windowWidth; c.windowHeight = s.windowHeight; c.fullscreen = s.fullscreen;
     c.autoCloseLauncher = s.autoCloseLauncher; c.showLogs = s.showLogs; c.debugMode = s.debugMode;
     return c;
@@ -160,6 +165,9 @@ export class SettingsManager {
     }
     if (o['language'] !== undefined) {
       c.language = o['language'] as Language;
+    }
+    if (o['renderer'] !== undefined) {
+      c.renderer = o['renderer'] as string;
     }
     if (o['maxMemory'] !== undefined) {
       c.maxMemory = o['maxMemory'] as number;
@@ -295,6 +303,9 @@ export class SettingsManager {
         break;
       case 'extraJVMArgs':
         patch.extraJVMArgs = value as string;
+        break;
+      case 'renderer':
+        patch.renderer = value as string;
         break;
       case 'windowWidth':
         patch.windowWidth = value as number;
