@@ -11,6 +11,7 @@
 import { Preferences } from '@kit.ArkData';
 import { AppContext } from '../common/AppContext';
 import { Theme } from './SettingsManager';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 /** 强调色方案 */
 export enum AccentColor {
@@ -151,18 +152,29 @@ export class ThemeEngine {
     return this.config.mode === Theme.LIGHT ? LightPalette : DarkPalette;
   }
 
-  /** 获取实际模式 (考虑 SYSTEM) */
+  /**
+   * 获取实际模式 (考虑 SYSTEM)
+   *
+   * SYSTEM 模式跟随系统深色：读 EntryAbility 写入的 AppStorage['currentColorMode']
+   * （值来自 UIAbilityContext.config.colorMode，EntryAbility 在 onCreate /
+   * onConfigurationUpdate 中维护）。读不到时回落深色。
+   */
   get effectiveMode(): Theme.LIGHT | Theme.DARK {
     if (this.config.mode === Theme.SYSTEM) {
-      // 检查系统深色模式设置
-      try {
-        // TODO: 通过系统 API 获取 isDarkMode
-        return Theme.DARK;
-      } catch {
-        return Theme.DARK;
-      }
+      return ThemeEngine.isSystemDark() ? Theme.DARK : Theme.LIGHT;
     }
     return this.config.mode === Theme.LIGHT ? Theme.LIGHT : Theme.DARK;
+  }
+
+  /** 系统当前是否为深色模式 */
+  static isSystemDark(): boolean {
+    try {
+      // COLOR_MODE_DARK = 0，COLOR_MODE_LIGHT = 1
+      const mode: number = AppStorage.get<number>('currentColorMode') ?? 0;
+      return mode === 0;
+    } catch {
+      return true;
+    }
   }
 
   async initialize(): Promise<void> {

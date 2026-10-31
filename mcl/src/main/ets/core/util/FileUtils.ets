@@ -9,6 +9,8 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppContext } from '../../common/AppContext';
+import { GameStorage } from '../storage/GameStorage';
+import { StorageManager } from '../storage/StorageManager';
 
 const TAG = 'FCL-FileUtils';
 
@@ -236,11 +238,17 @@ export class FileUtils {
     }
   }
 
-  /** 读取文件最后修改时间 (毫秒) */
+  /**
+   * 读取文件最后修改时间（毫秒）
+   *
+   * 注意：HarmonyOS fs.Stat.mtime 的原始单位是【秒】，此处已换算成毫秒，
+   * 便于与 Date.now() 直接比较排序。
+   */
   static getLastModified(path: string): number {
     try {
       const stat = fs.statSync(path);
-      return stat.mtime ?? 0;
+      const seconds = stat.mtime ?? 0;
+      return seconds > 0 ? seconds * 1000 : 0;
     } catch {
       return 0;
     }
@@ -255,10 +263,14 @@ export class FileUtils {
     }
   }
 
-  /** 获取 Minecraft 数据目录 */
+  /**
+   * 获取 Minecraft 数据目录
+   *
+   * 走 GameStorage.resolveMcDir()：可在「设置 → 游戏数据位置」切换沙箱内 / 沙箱外，
+   * 沙箱外位于 <Download>/com.harmony.fcl/.minecraft，卸载应用不丢数据。
+   */
   static getMinecraftDir(): string {
-    const gameDir = AppContext.context.filesDir;
-    const mcDir = `${gameDir}/.minecraft`;
+    const mcDir = GameStorage.resolveMcDir(StorageManager.getInstance().storageLocation);
     if (!FileUtils.exists(mcDir)) {
       FileUtils.mkdirs(mcDir);
     }

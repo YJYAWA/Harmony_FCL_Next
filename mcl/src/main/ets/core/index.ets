@@ -36,6 +36,13 @@ export { ControlLayoutStore, LayoutEntry } from './control/ControlLayoutStore';
 export { SettingsManager, Theme, DownloadSource } from './SettingsManager';
 export { ThemeEngine, AccentColor, DarkPalette, LightPalette } from './ThemeEngine';
 
+// ── 存储 ──
+export { GameStorage, StorageLocation, parseStorageLocation } from './storage/GameStorage';
+export { StorageManager } from './storage/StorageManager';
+
+// ── 归档导入导出 ──
+export { GameArchiveIO, ImportResult, BatchImportResult, ImportFailure } from './archive/GameArchiveIO';
+
 // ── 工具 ──
 export { Constants } from './util/Constants';
 export { AppVersion } from './util/AppVersion';

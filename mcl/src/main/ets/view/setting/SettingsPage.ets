@@ -4,15 +4,21 @@
  */
 import { SettingsManager, LauncherSettings, Theme, DownloadSource }
   from '../../core/SettingsManager';
+import { StorageManager } from '../../core/storage/StorageManager';
+import { StorageLocation } from '../../core/storage/GameStorage';
 import { promptAction } from '@kit.ArkUI';
 
 @ComponentV2
 export struct SettingsPage {
   @Local settings: LauncherSettings = SettingsManager.getInstance().settings;
+  @Local storageLocation: StorageLocation = StorageManager.getInstance().storageLocation;
+  @Local storageBusy: boolean = false;
   private manager: SettingsManager = SettingsManager.getInstance();
+  private storage: StorageManager = StorageManager.getInstance();
 
   aboutToAppear(): void {
     this.settings = this.manager.settings;
+    this.storageLocation = this.storage.storageLocation;
   }
 
   build() {
@@ -71,6 +77,10 @@ export struct SettingsPage {
             this.settings = s;
             this.manager.set('extraJVMArgs', value);
           });
+
+        // 游戏数据位置（鸿蒙沙箱严格：沙箱内卸载即丢）
+        this.buildSection('Storage');
+        this.buildStorageSelector();
 
         // 窗口设置
         this.buildSection('Window');
@@ -259,9 +269,84 @@ export struct SettingsPage {
     .margin({ bottom: 8 })
   }
 
+  /**
+   * 游戏数据位置选择器
+   *
+   * 沙箱内：filesDir/.minecraft —— 卸载应用即删除
+   * 沙箱外：Download/com.harmony.fcl/.minecraft —— 卸载不丢
+   *
+   * 切到沙箱外时会：平板走运行时申请 READ_WRITE_DOWNLOAD_DIRECTORY，
+   * 手机走 DocumentViewPicker 学一次公共目录路径；并把已有游戏数据复制过去。
+   */
   @Builder
-  buildToggle(label: string, value: boolean, onChange: (value: boolean) => void) {
-    Row() {
+  buildStorageSelector() {
+    Column() {
+      Row() {
+        Column() {
+          Text('Game data location')
+            .fontSize(15).fontColor('#CCCCCC')
+          Text(this.storageLocation === StorageLocation.EXTERNAL
+            ? 'Download/com.harmony.fcl/.minecraft (survives uninstall)'
+            : 'App sandbox (deleted on uninstall)')
+            .fontSize(11).fontColor('#666666').margin({ top: 2 })
+        }
+        .alignItems(HorizontalAlign.Start).layoutWeight(1)
+
+        if (this.storageBusy) {
+          LoadingProgress().width(20).height(20).color('#E94560')
+        } else {
+          Row() {
+            Button(this.storageLocation === StorageLocation.SANDBOX ? 'Sandbox' : 'External')
+              .fontSize(12)
+              .fontColor(this.storageLocation === StorageLocation.SANDBOX ? '#FFFFFF' : '#999999')
+              .backgroundColor(this.storageLocation === StorageLocation.SANDBOX ? '#E94560' : '#0F3460')
+              .borderRadius(6).padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .margin({ right: 6 })
+              .onClick(() => this.changeStorage(StorageLocation.SANDBOX))
+            Button(this.storageLocation === StorageLocation.EXTERNAL ? 'External' : 'External')
+              .fontSize(12)
+              .fontColor(this.storageLocation === StorageLocation.EXTERNAL ? '#FFFFFF' : '#999999')
+              .backgroundColor(this.storageLocation === StorageLocation.EXTERNAL ? '#E94560' : '#0F3460')
+              .borderRadius(6).padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .onClick(() => this.changeStorage(StorageLocation.EXTERNAL))
+          }
+        }
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor('#16213E')
+    .borderRadius(8)
+    .margin({ bottom: 8 })
+  }
+
+  async changeStorage(location: StorageLocation): Promise<void> {
+    if (location === this.storageLocation) {
+      return;
+    }
+    this.storageBusy = true;
+    try {
+      const ok = await this.storage.setStorageLocation(location);
+      if (ok) {
+        this.storageLocation = this.storage.storageLocation;
+        promptAction.showToast({
+          message: location === StorageLocation.EXTERNAL
+            ? 'Switched to external storage'
+            : 'Switched to app sandbox'
+        });
+      } else {
+        promptAction.showToast({ message: 'Failed to switch storage location' });
+      }
+    } catch (err) {
+      promptAction.showToast({ message: `Storage switch failed: ${err}` });
+    } finally {
+      this.storageBusy = false;
+    }
+  }
+
+  @Builder
+  buildToggle(label: string, value: boolean, onChange: (value: boolean) => void) {    Row() {
       Text(label)
         .fontSize(15)
         .fontColor('#CCCCCC')

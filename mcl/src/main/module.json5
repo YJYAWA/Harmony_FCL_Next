@@ -36,31 +36,43 @@
     ],
     "requestPermissions": [
       {
+        // 网络（下载版本 / 库 / 模组）。普通权限，静默授予。
         "name": "ohos.permission.INTERNET"
       },
       {
+        // 读取网络连接状态，区分「设备无网」与「能上网但连不上服务器」。
         "name": "ohos.permission.GET_NETWORK_INFO"
       },
       {
-        "name": "ohos.permission.WRITE_IMAGEVIDEO",
-        "reason": "$string:write_media_reason",
+        // 沙箱外游戏数据目录 (<Download>/com.harmony.fcl) 需要读写公共下载目录。
+        // user_grant：除声明外，运行时必须 requestPermissionsFromUser 申请。
+        // 官方注明该权限在 2in1 / PC 上支持稳定，手机/部分平板可能授权失败 ——
+        // 失败时自动回落沙箱内目录（见 core/storage/StorageManager）。
+        "name": "ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY",
+        "reason": "$string:download_dir_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
       },
       {
-        "name": "ohos.permission.READ_IMAGEVIDEO",
-        "reason": "$string:read_media_reason",
+        // picker 授权持久化：DocumentViewPicker 授予的公共目录访问默认是临时的，
+        // 退后台 / 重启即失效。该权限配合 fileShare.persistPermission 让已授权
+        // 的公共目录跨重启仍可访问。
+        "name": "ohos.permission.FILE_ACCESS_PERSIST",
+        "reason": "$string:file_persist_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],
           "when": "inuse"
         }
       },
       {
+        // 游戏运行期需要进程在后台继续存活（切到其他应用时 Minecraft 仍在跑）。
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       },
       {
+        // 内嵌 OpenJDK HotSpot 的 JIT 需要可写可执行内存。
+        // 注意：该受限权限官方限定平板 / 2in1 设备可用，手机不可用。
         "name": "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY"
       }
     ]

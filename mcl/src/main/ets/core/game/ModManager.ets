@@ -176,7 +176,8 @@ export class ResourceManager {
     const isDirectory = FileUtils.isDirectory(path);
     return {
       size: size >= 0 ? size : 0,
-      lastModified: Date.now(),
+      // 真实 mtime（毫秒）；取不到时回落 0，避免用 Date.now() 造假时间
+      lastModified: FileUtils.getLastModified(path),
       isDirectory
     };
   }

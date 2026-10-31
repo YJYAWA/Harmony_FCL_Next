@@ -25,12 +25,12 @@
       "value": "OpenJDK JIT compiler requires writable and executable memory pages to generate native code at runtime."
     },
     {
-      "name": "write_media_reason",
-      "value": "Used to save game screenshots and export world saves."
+      "name": "download_dir_reason",
+      "value": "Used to store game data in the public Download folder so it is not deleted when the app is uninstalled."
     },
     {
-      "name": "read_media_reason",
-      "value": "Used to import resource packs and mod files."
+      "name": "file_persist_reason",
+      "value": "Used to keep access to the game data folder you selected in the system file manager."
     }
   ]
 }

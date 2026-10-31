@@ -5,7 +5,13 @@
 import { ResourceManager, ManagedItemType, ManagedItem }
   from '../../core/game/ModManager';
 import { FileUtils } from '../../core/util/FileUtils';
+import { GameArchiveIO } from '../../core/archive/GameArchiveIO';
 import { promptAction } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+
+/** 各资源类型的允许扩展名（与 picker 的 fileSuffixFilters 对应） */
+const MOD_EXTENSIONS: string[] = ['.jar'];
+const ZIP_EXTENSIONS: string[] = ['.zip'];
 
 /** 管理页顶部标签 */
 interface ManagedTab {
@@ -135,8 +141,7 @@ export struct ManagePage {
         .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
         .margin({ left: 8 })
         .onClick(() => {
-          // 打开文件选择器选择模组文件
-          promptAction.showToast({ message: 'File picker: select .jar or .zip' });
+          this.importResources();
         })
     }
     .width('100%').padding({ left: 16, right: 16, top: 8, bottom: 4 })
@@ -197,9 +202,28 @@ export struct ManagePage {
     .margin({ top: 6, left: 16, right: 16 })
   }
 
+  /**
+   * 从系统文件选择器导入资源到当前分类目录。
+   * 鸿蒙权限：走 DocumentViewPicker，用户显式授权，无需额外 user_grant 权限。
+   */
+  private async importResources(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const targetDir = ResourceManager.getDirectory(this.selectedType);
+    const exts = this.selectedType === ManagedItemType.MOD ? MOD_EXTENSIONS : ZIP_EXTENSIONS;
+    try {
+      const result = await GameArchiveIO.importResourceFiles(ctx, targetDir, exts);
+      if (result.cancelled) {
+        return;
+      }
+      promptAction.showToast({ message: result.message });
+      this.loadItems();
+    } catch (err) {
+      promptAction.showToast({ message: `导入失败: ${err}` });
+    }
+  }
+
   @Builder
-  buildEmptyState() {
-    Column() {
+  buildEmptyState() {    Column() {
       Text('No items found')
         .fontSize(18).fontColor('#999999').margin({ top: 64, bottom: 8 })
       Text('Import files or download from the store')

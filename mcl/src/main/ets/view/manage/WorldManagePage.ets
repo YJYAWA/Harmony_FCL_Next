@@ -4,7 +4,9 @@
  */
 import { ResourceManager, ManagedItemType, SaveInfo } from '../../core/game/ModManager';
 import { FileUtils } from '../../core/util/FileUtils';
+import { GameArchiveIO, ImportResult, BatchImportResult } from '../../core/archive/GameArchiveIO';
 import { promptAction } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 
 @ComponentV2
 export struct WorldManagePage {
@@ -73,6 +75,13 @@ export struct WorldManagePage {
             .fontSize(24).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
           Blank()
           Text(`${this.saves.length} worlds`).fontSize(12).fontColor('#999999')
+          Button('Import')
+            .fontSize(12).fontColor('#FFFFFF').backgroundColor('#0F3460')
+            .borderRadius(8).padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .margin({ left: 12 })
+            .onClick(() => {
+              this.importSaves();
+            })
         }
         .width('100%').padding(16)
 
@@ -202,15 +211,37 @@ export struct WorldManagePage {
   }
 
   exportSave(save: SaveInfo): void {
-    // 导出为 ZIP 文件
-    const exportDir = `${FileUtils.getMinecraftDir()}/exports`;
-    FileUtils.mkdirs(exportDir);
-    const exportPath = `${exportDir}/${save.name}_${Date.now()}.zip`;
+    // 导出为 ZIP 文件：压到临时 zip → 系统另存 picker 让用户选位置
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const savesDir = ResourceManager.getDirectory(ManagedItemType.SAVE);
+    GameArchiveIO.exportSaveZip(ctx, savesDir, save.name).then((result: ImportResult) => {
+      if (result.cancelled) {
+        return;
+      }
+      if (result.ok) {
+        promptAction.showToast({ message: `已导出 ${result.name}` });
+      } else {
+        promptAction.showToast({ message: result.message });
+      }
+    }).catch((err: Object) => {
+      promptAction.showToast({ message: `导出失败: ${err}` });
+    });
+  }
 
-    // TODO: ZIP 压缩使用 @ohos.zlib
-    this.exportPath = exportPath;
-    this.showExportDialog = true;
-
-    promptAction.showToast({ message: `Exporting to ${exportPath}` });
+  /**
+   * 导入存档：从系统文件选择器选 .zip → 解压整理到 saves/
+   */
+  importSaves(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const savesDir = ResourceManager.getDirectory(ManagedItemType.SAVE);
+    GameArchiveIO.importSaveZips(ctx, savesDir).then((result: BatchImportResult) => {
+      if (result.cancelled) {
+        return;
+      }
+      promptAction.showToast({ message: result.message });
+      this.loadSaves();
+    }).catch((err: Object) => {
+      promptAction.showToast({ message: `导入失败: ${err}` });
+    });
   }
 }
