@@ -3,9 +3,6 @@
  * 移植自: FCLLibrary/browser/
  */
 import { FileUtils } from '../../core/util/FileUtils';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-const TAG = 'FCL-FileBrowser';
 
 /** 文件浏览器配置 */
 export interface FileBrowserConfig {

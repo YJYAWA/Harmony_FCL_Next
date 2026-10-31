@@ -5,7 +5,7 @@
  * 功能: 拖拽调整位置、大小、颜色、透明度，新增/删除控件
  */
 import { ControlLayout, ButtonConfig, DirectionConfig, TouchpadConfig,
-  ControlType, Direction } from './TouchController';
+  ControlType } from './TouchController';
 import { FileUtils } from '../../core/util/FileUtils';
 import { AppContext } from '../../common/AppContext';
 import { promptAction } from '@kit.ArkUI';
@@ -183,10 +183,8 @@ export struct ControlEditor {
       Circle()
         .width(dir.size).height(dir.size)
         .fill('rgba(255,255,255,0.08)')
-        .stroke({
-          width: dir.id === this.selectedId ? 2.5 : 1.5,
-          color: dir.id === this.selectedId ? '#E94560' : `${dir.color}80`
-        })
+        .stroke(dir.id === this.selectedId ? '#E94560' : `${dir.color}80`)
+        .strokeWidth(dir.id === this.selectedId ? 2.5 : 1.5)
     }
     .width(dir.size).height(dir.size)
     .position({ x: `${dir.x * 100}%`, y: `${dir.y * 100}%` })

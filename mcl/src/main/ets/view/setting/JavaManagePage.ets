@@ -27,10 +27,19 @@ interface JavaRuntime {
 /** 渲染器类型 */
 enum Renderer {
   AUTO = 'auto',
+  MOBILEGLUES = 'mobileglues',
+  MOBILEGL = 'mobilegl',
   VIRGL = 'virgl',
   ZINK = 'zink',
   MESA = 'mesa',
   GL4ES = 'gl4es'
+}
+
+/** 渲染器选项 */
+interface RendererOption {
+  v: Renderer;
+  l: string;
+  d: string;
 }
 
 @ComponentV2
@@ -42,17 +51,25 @@ export struct JavaManagePage {
   @Local searchPath: string = '';
 
   private settings: SettingsManager = SettingsManager.getInstance();
+  private readonly rendererOptions: RendererOption[] = [
+    { v: Renderer.AUTO, l: 'Auto-detect', d: 'Automatically select best renderer' },
+    { v: Renderer.MOBILEGLUES, l: 'MobileGlues', d: 'OpenGL→GLES 3.2 translation (AMCL verified, default for 1.20.x)' },
+    { v: Renderer.MOBILEGL, l: 'MobileGL', d: 'DirectVulkan renderer (required for MC 26.3+, libmobilegl.so)' },
+    { v: Renderer.GL4ES, l: 'GL4ES', d: 'OpenGL→GLES translation (legacy, LWJGL2 path)' },
+    { v: Renderer.VIRGL, l: 'VirGL', d: 'Virtual GPU (best performance)' },
+    { v: Renderer.ZINK, l: 'Zink', d: 'OpenGL over Vulkan (experimental)' }
+  ];
 
   aboutToAppear(): void {
     this.loadRuntimes();
-    this.selectedJava = this.settings.get('javaPath') || 'Auto-detect';
+    this.selectedJava = this.settings.settings.javaPath || 'Auto-detect';
   }
 
   loadRuntimes(): void {
     this.javaRuntimes = [];
 
     // 自动检测预置 JDK (AMCL 构建)
-    const builtin = [
+    const builtin: JavaRuntime[] = [
       { name: 'JDK 8 (Built-in)', path: `${AppContext.filesDir}/jdk/jdk8/bin/java`, version: 8, vendor: 'OpenJDK', arch: 'aarch64', sizeFormatted: '37MB', isAutoDetected: true },
       { name: 'JDK 17 (Built-in)', path: `${AppContext.filesDir}/jdk/jdk17/bin/java`, version: 17, vendor: 'OpenJDK', arch: 'aarch64', sizeFormatted: '108MB', isAutoDetected: true },
       { name: 'JDK 21 (Built-in)', path: `${AppContext.filesDir}/jdk/jdk21/bin/java`, version: 21, vendor: 'OpenJDK', arch: 'aarch64', sizeFormatted: '112MB', isAutoDetected: true }
@@ -117,13 +134,8 @@ export struct JavaManagePage {
             .fontSize(12).fontColor('#666666').margin({ bottom: 8 })
 
           ForEach(
-            [
-              { v: Renderer.AUTO, l: 'Auto-detect', d: 'Automatically select best renderer' },
-              { v: Renderer.GL4ES, l: 'GL4ES', d: 'OpenGL→GLES translation (best compatibility)' },
-              { v: Renderer.VIRGL, l: 'VirGL', d: 'Virtual GPU (best performance)' },
-              { v: Renderer.ZINK, l: 'Zink', d: 'OpenGL over Vulkan (experimental)' }
-            ],
-            (item: { v: Renderer; l: string; d: string }) => {
+            this.rendererOptions,
+            (item: RendererOption) => {
               this.buildRendererCard(item.v, item.l, item.d);
             }
           )
@@ -196,6 +208,8 @@ export struct JavaManagePage {
         .onChange((checked: boolean) => {
           if (checked) {
             this.selectedRenderer = value;
+            // 持久化渲染器选择（GameLauncherService 启动时读取并写入启动环境）
+            AppStorage.setOrCreate('fcl.renderer', value as string);
             hilog.info(0x0000, TAG, `Renderer selected: ${value}`);
           }
         })

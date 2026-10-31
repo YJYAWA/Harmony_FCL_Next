@@ -13,13 +13,14 @@
  * - 需要 ALLOW_WRITABLE_CODE_MEMORY ACL
  * - 通过 XComponent 提供 OpenGL ES 渲染表面
  */
-import { process } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { LaunchConfig, GameProcessState } from '../core/game/GameTypes';
 import { FileUtils } from '../core/util/FileUtils';
 import { Constants } from '../core/util/Constants';
 import { SettingsManager } from '../core/SettingsManager';
+import { AppContext } from '../common/AppContext';
+import native from 'libfcl_native.so';
 
 const TAG = 'FCL-GameLauncher';
 
@@ -44,7 +45,8 @@ export class GameLauncherService {
   private static instance: GameLauncherService | null = null;
   private processState: GameProcessState = {
     pid: 0,
-    isRunning: false
+    isRunning: false,
+    logLines: []
   };
   private callbacks: GameProcessCallbacks = {};
   private logLines: string[] = [];
@@ -60,7 +62,13 @@ export class GameLauncherService {
   }
 
   get state(): GameProcessState {
-    return { ...this.processState, logLines: [...this.logLines] };
+    return {
+      pid: this.processState.pid,
+      isRunning: this.processState.isRunning,
+      exitCode: this.processState.exitCode,
+      startTime: this.processState.startTime,
+      logLines: [...this.logLines]
+    };
   }
 
   get isRunning(): boolean {
@@ -197,13 +205,10 @@ export class GameLauncherService {
   /**
    * 启动 Minecraft
    *
-   * 注意: 当前版本通过 NAPI 调用原生 JVM 启动器
-   * 完整实现需要:
-   * 1. 编译 OpenJDK for HarmonyOS (参考 AMCL 的 JDK releases)
-   * 2. 实现 NAPI 桥接层 (对应 FCLauncher 的 JNI 代码)
-   * 3. 通过 posix_spawn 启动 JVM 进程
-   *
-   * 当前为骨架实现, 展示了完整的启动流程
+   * 通过 NAPI 调用原生 JVM 嵌入层（libfcl_native.so，移植自 AMCL 的方案）：
+   * - OpenJDK for HarmonyOS 从 filesDir/jdk/<version>/ 经自研 ELF loader 加载
+   * - 需要 ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY ACL 权限（JIT 必须）
+   * - 游戏输出经 dup2 重定向到 <gameDir>/logs/latest.log，GameLogViewer 轮询读取
    */
   async launchGame(config: LaunchConfig): Promise<LaunchResult> {
     if (this.processState.isRunning) {
@@ -216,7 +221,7 @@ export class GameLauncherService {
     hilog.info(0x0000, TAG, `GameDir: ${config.gameDir}`);
 
     try {
-      // 验证 Java 运行时
+      // 验证 Java 运行时（javaPath 形如 <filesDir>/jdk/17/bin/java）
       if (!config.javaPath || !FileUtils.exists(config.javaPath)) {
         return { success: false, error: 'Java runtime not found. Please download JDK first.' };
       }
@@ -230,41 +235,74 @@ export class GameLauncherService {
         };
       }
 
-      // 构建命令行
-      const commandArgs = this.buildLaunchCommand(config);
-      hilog.info(0x0000, TAG, `Command: ${commandArgs.join(' ')}`);
+      // 前置检查：JIT（RWX mmap）权限
+      if (!native.checkJitAvailable()) {
+        return {
+          success: false,
+          error: 'JIT 权限不可用（RWX mmap 被拒绝）。请确认已申请 ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY 权限并使用 debug 签名。'
+        };
+      }
 
-      // ============ NAPI 调用点 ============
-      // TODO: 通过 NAPI 调用原生 JVM 启动器
-      // 参考: FCLauncher/jni/jre_launcher.c
-      // HarmonyOS 使用 posix_spawn 或 fork+exec
-      //
-      // import native from 'libfcl_native.so';
-      // const pid = native.launchJVM(commandArgs, envVars);
-      //
-      // 当前为占位实现
-      // ===================================
+      // 构建命令行（native 侧解析 -Xmx / -cp / 主类 / --gameDir）
+      const commandArgs = this.buildLaunchCommand(config);
+      hilog.info(0x0000, TAG, `Command: ${commandArgs.slice(0, 8).join(' ')} ...`);
+
+      // 推导 JDK 根目录：<jdk>/bin/java → <jdk>
+      const jdkDir = this.deriveJdkDir(config.javaPath);
+      if (!jdkDir) {
+        return { success: false, error: `Cannot derive JDK directory from javaPath: ${config.javaPath}` };
+      }
+
+      const filesDir = AppContext.filesDir;
 
       this.processState.isRunning = true;
       this.processState.startTime = Date.now();
-      this.processState.pid = 0; // 将由 NAPI 返回真实 PID
+      this.processState.pid = -1; // 进程内嵌入模式无独立 PID
 
       this.logLine(`[FCL] Launching Minecraft ${config.version}...`);
-      this.logLine(`[FCL] Java: ${config.javaPath}`);
-      this.logLine(`[FCL] Args: ${commandArgs.slice(0, 10).join(' ')}...`);
+      this.logLine(`[FCL] JDK: ${jdkDir}`);
+      this.logLine(`[FCL] Memory: ${config.minMemory}M-${config.maxMemory}M`);
 
-      return { success: true, pid: this.processState.pid };
+      // ============ NAPI 调用：进程内嵌入 JVM 并运行主类 ============
+      // 阻塞语义由 Promise 承载：native 侧在 libuv 工作线程 jvmInit + jvmCallMain，
+      // 游戏 main() 返回后 resolve 退出码。此 await 挂起直到游戏退出。
+      const exitCode = await native.launchJVM(filesDir, jdkDir, commandArgs);
+
+      this.processState.isRunning = false;
+      this.processState.exitCode = exitCode;
+      this.logLine(`[FCL] Game exited with code ${exitCode}.`);
+      if (this.callbacks.onExit) {
+        this.callbacks.onExit(exitCode);
+      }
+
+      return { success: exitCode === 0, pid: -1 };
 
     } catch (err) {
       const error = err as BusinessError;
       hilog.error(0x0000, TAG, `Launch failed: ${error.message}`);
       this.processState.isRunning = false;
+      if (this.callbacks.onError) {
+        this.callbacks.onError(error.message ?? String(err));
+      }
       return { success: false, error: error.message };
     }
   }
 
   /**
+   * 从 java 路径推导 JDK 根目录
+   * <filesDir>/jdk/17/bin/java → <filesDir>/jdk/17
+   */
+  private deriveJdkDir(javaPath: string): string {
+    const binIndex = javaPath.lastIndexOf('/bin/');
+    if (binIndex <= 0) {
+      return '';
+    }
+    return javaPath.substring(0, binIndex);
+  }
+
+  /**
    * 停止游戏进程
+   * 经 JNI System.exit(0) 触发 MC 的 shutdown hooks（保存世界等）
    */
   async stopGame(): Promise<void> {
     if (!this.processState.isRunning) {
@@ -274,15 +312,22 @@ export class GameLauncherService {
     hilog.info(0x0000, TAG, 'Stopping Minecraft...');
 
     try {
-      // NAPI 调用: 向 JVM 发送 SIGTERM
-      // native.stopJVM(this.processState.pid);
-      this.processState.isRunning = false;
-      this.processState.exitCode = 0;
-      this.logLine('[FCL] Game stopped.');
+      native.stopGame();
+      this.logLine('[FCL] Stop requested (System.exit via JNI).');
     } catch (err) {
       const error = err as BusinessError;
       hilog.error(0x0000, TAG, `Stop failed: ${error.message}`);
     }
+  }
+
+  /** 检查游戏是否正在运行（native 侧实时状态） */
+  isGameRunningNative(): boolean {
+    return native.isGameRunning();
+  }
+
+  /** 获取 native 侧最近一次 JVM 操作的状态描述 */
+  getNativeStatus(): string {
+    return native.getStatus();
   }
 
   /** 添加日志行 */

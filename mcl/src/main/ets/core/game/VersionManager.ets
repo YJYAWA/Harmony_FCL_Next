@@ -1,4 +1,4 @@
-import { httpGet, httpPost } from '../util/HttpUtils';
+import { httpGet } from '../util/HttpUtils';
 /**
  * Minecraft 版本管理器
  * 移植自: FCLCore 的 DefaultGameBuilder + VersionList
@@ -9,11 +9,10 @@ import { httpGet, httpPost } from '../util/HttpUtils';
  * 3. 管理已安装版本
  * 4. 模组加载器安装 (Fabric/Forge/NeoForge/OptiFine)
  */
-import { GameVersion, VersionType, Library, AssetIndex, ModLoaderType } from './GameTypes';
+import { GameVersion, VersionType, Library, AssetIndex, AssetObject, JavaVersion, LibraryDownloads, LibraryRule } from './GameTypes';
 import { DownloadManager, DownloadTask, DownloadResult } from '../download/DownloadManager';
 import { DownloadProvider, RemoteVersion } from '../download/DownloadProvider';
 import { FileUtils } from '../util/FileUtils';
-import { Constants } from '../util/Constants';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'FCL-VersionManager';
@@ -311,9 +310,10 @@ export class VersionManager {
       }
     }
     if (Array.isArray(current)) {
+      const items = current as Array<Object>;
       const result: string[] = [];
-      for (let i = 0; i < current.length; i++) {
-        const item = current[i];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (typeof item === 'string') {
           result.push(item);
         }

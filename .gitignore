@@ -29,3 +29,6 @@ oh-package-lock.json5
 *.tmp
 *.swp
 *~
+
+# Runtime zips (download from mc-ohos-resources, not distributed)
+runtime/

@@ -3,9 +3,7 @@
  * 移植自: FCLCore 的下载服务逻辑
  * 使用 HarmonyOS @ohos.request 系统级下载 API
  */
-import { request } from '@kit.BasicServicesKit';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { hash } from '@kit.ArkTS';
+import { request, BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppContext } from '../../common/AppContext';
 
@@ -181,10 +179,10 @@ export class DownloadManager {
           resolve(new DownloadResult(true, task));
         });
 
-        downloadTask.on('fail', (errCode: number, errMsg: string) => {
+        downloadTask.on('fail', (err: number) => {
           task.status = DownloadStatus.FAILED;
-          hilog.error(0x0000, TAG, `Download failed: ${task.url}, code=${errCode}, msg=${errMsg}`);
-          resolve(new DownloadResult(false, task, `[${errCode}] ${errMsg}`));
+          hilog.error(0x0000, TAG, `Download failed: ${task.url}, code=${err}`);
+          resolve(new DownloadResult(false, task, `[${err}] download failed`));
         });
       });
     } catch (err) {

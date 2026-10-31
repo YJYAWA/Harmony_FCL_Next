@@ -1,0 +1,6 @@
+{
+  "name": "libfcl_native.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "FCL-HarmonyOS native bridge (JVM embedding via AMCL-derived ELF loader)"
+}

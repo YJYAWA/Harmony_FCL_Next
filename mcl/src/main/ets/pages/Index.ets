@@ -14,7 +14,8 @@ import { VersionDetailPage } from '../view/version/VersionDetailPage';
 import { ControlEditor } from '../view/control/ControlEditor';
 import { GameLogViewer } from '../view/common/GameLogViewer';
 import { CrashReportView } from '../view/common/CrashReporter';
-import { NavigationService, RouteNames, buildRoutePage } from '../common/NavigationRouter';
+import { GamePage } from '../view/game/GamePage';
+import { NavigationService, RouteNames } from '../common/NavigationRouter';
 
 @Entry
 @ComponentV2
@@ -80,6 +81,8 @@ struct Index {
       CrashReportView()
     } else if (name === RouteNames.CONTROL_EDITOR) {
       ControlEditor()
+    } else if (name === RouteNames.GAME) {
+      GamePage()
     }
   }
 

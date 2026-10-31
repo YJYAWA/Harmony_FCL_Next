@@ -2,10 +2,16 @@
  * 模组/资源/存档管理页面
  * 移植自: FCL/ui/manage/
  */
-import { ResourceManager, ManagedItemType, ManagedItem, ModInfo }
+import { ResourceManager, ManagedItemType, ManagedItem }
   from '../../core/game/ModManager';
 import { FileUtils } from '../../core/util/FileUtils';
 import { promptAction } from '@kit.ArkUI';
+
+/** 管理页顶部标签 */
+interface ManagedTab {
+  type: ManagedItemType;
+  label: string;
+}
 
 @ComponentV2
 export struct ManagePage {
@@ -15,6 +21,14 @@ export struct ManagePage {
   @Local searchQuery: string = '';
   @Local showDeleteConfirm: boolean = false;
   @Local deleteTarget: ManagedItem | null = null;
+
+  private readonly tabs: ManagedTab[] = [
+    { type: ManagedItemType.MOD, label: 'Mods' },
+    { type: ManagedItemType.RESOURCE_PACK, label: 'Resource Packs' },
+    { type: ManagedItemType.SHADER_PACK, label: 'Shaders' },
+    { type: ManagedItemType.SAVE, label: 'Saves' },
+    { type: ManagedItemType.DATA_PACK, label: 'Data Packs' }
+  ];
 
   aboutToAppear(): void {
     this.loadItems();
@@ -78,29 +92,26 @@ export struct ManagePage {
 
   @Builder
   buildTypeTabs() {
-    Row() {
-      ForEach(
-        [
-          { type: ManagedItemType.MOD, label: 'Mods' },
-          { type: ManagedItemType.RESOURCE_PACK, label: 'Resource Packs' },
-          { type: ManagedItemType.SHADER_PACK, label: 'Shaders' },
-          { type: ManagedItemType.SAVE, label: 'Saves' },
-          { type: ManagedItemType.DATA_PACK, label: 'Data Packs' }
-        ],
-        (tab: { type: ManagedItemType; label: string }) => {
-          Text(tab.label)
-            .fontSize(13)
-            .fontColor(this.selectedType === tab.type ? '#FFFFFF' : '#999999')
-            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-            .backgroundColor(this.selectedType === tab.type ? '#E94560' : '#16213E')
-            .borderRadius(16)
-            .margin({ right: 6 })
-            .onClick(() => {
-              this.selectedType = tab.type;
-              this.loadItems();
-            })
-        }
-      )
+    Scroll() {
+      Row() {
+        ForEach(
+          this.tabs,
+          (tab: ManagedTab) => {
+            Text(tab.label)
+              .fontSize(13)
+              .fontColor(this.selectedType === tab.type ? '#FFFFFF' : '#999999')
+              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .backgroundColor(this.selectedType === tab.type ? '#E94560' : '#16213E')
+              .borderRadius(16)
+              .margin({ right: 6 })
+              .onClick(() => {
+                this.selectedType = tab.type;
+                this.loadItems();
+              })
+          }
+        )
+      }
+      .width('auto')
     }
     .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 8 })
     .backgroundColor('#0D1B2A')

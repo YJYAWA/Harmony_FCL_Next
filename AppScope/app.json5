@@ -1,10 +1,15 @@
 {
   "app": {
-    "bundleName": "com.mc.fcl_harmonyos",
+    "bundleName": "com.harmony.fcl",
     "vendor": "example",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "buildVersion": "1",
+    // 系统按设备能力启用 GL/GLES 提供者（MobileGlues 需要；AMCL 同款配置）。
+    // 必须在进程首次 EGL 调用前生效，不能在游戏启动后动态改写。
+    "appEnvironments": [
+      { "name": "NEED_OPENGL", "value": "1" }
+    ],
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

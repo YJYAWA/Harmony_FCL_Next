@@ -1,0 +1,204 @@
+// Drives the REAL gl/framebuffer.cpp against a fake driver that records which
+// texture is physically attached at each colour attachment point. The question
+// the shuffle has to answer correctly is only ever this one: when the
+// application draws through draw-buffer slot j, does the texture it named in
+// bufs[j] actually receive the pixels?
+#include <cstdio>
+#include <vector>
+#include <map>
+#include "gl/framebuffer.h"
+#include "gles/loader.h"
+#include "gl/mg.h"
+#include "config/settings.h"
+
+// --- the four externals framebuffer.cpp reaches for --------------------------
+struct gles_func_t g_gles_func{};
+namespace FSR1_Context { thread_local GLuint g_renderFBO = 0; thread_local bool g_dirty = false; }
+void set_gl_state_current_draw_fbo(GLuint v) { gl_state->current_draw_fbo = v; }
+static GLenum driver_error = GL_NO_ERROR, reported_error = GL_NO_ERROR;
+static unsigned reject_draws = 0;
+void mg_set_gl_error(GLenum e) { reported_error = e; }
+void mg_begin_driver_operation() { driver_error = GL_NO_ERROR; }
+bool mg_end_driver_operation(const char*) {
+    if (driver_error) reported_error = driver_error;
+    return driver_error == GL_NO_ERROR;
+}
+int __android_log_print(int, const char*, const char*, ...) { return 0; }
+extern "C" void write_log(const char*, ...) {}
+global_settings_t global_settings{};
+gl_state_s g_default_gl_state{};
+thread_local gl_state_t gl_state = &g_default_gl_state;
+
+// --- fake driver ----------------------------------------------------------
+static std::map<int, GLuint> physical;   // attachment index -> texture name
+static std::vector<GLenum>   draw_list;  // what the driver was last told
+static GLuint bound_draw_fb = 0;
+static unsigned attachment_calls = 0, read_calls = 0;
+
+static void fake_bind_fb(GLenum target, GLuint fb) { if(target!=GL_READ_FRAMEBUFFER)bound_draw_fb = fb; }
+static void fake_fbtex2d(GLenum, GLenum att, GLenum, GLuint tex, GLint) {
+    ++attachment_calls;
+    physical[att - GL_COLOR_ATTACHMENT0] = tex;
+}
+static void fake_fbrb(GLenum, GLenum att, GLenum, GLuint rb) {
+    ++attachment_calls;
+    physical[att - GL_COLOR_ATTACHMENT0] = rb;
+}
+static void fake_fblayer(GLenum, GLenum att, GLuint tex, GLint, GLint) {
+    ++attachment_calls;
+    physical[att - GL_COLOR_ATTACHMENT0] = tex;
+}
+static void fake_fbtex(GLenum, GLenum att, GLuint tex, GLint) {
+    ++attachment_calls;
+    physical[att - GL_COLOR_ATTACHMENT0] = tex;
+}
+static void fake_drawbuffers(GLsizei n, const GLenum* b) {
+    if (reject_draws) { --reject_draws; driver_error = GL_INVALID_OPERATION; return; }
+    if (n == 0) draw_list.clear(); else draw_list.assign(b, b + n);
+}
+static void fake_getintegerv(GLenum pname, GLint* v) {
+    *v = pname == GL_MAX_COLOR_ATTACHMENTS ? 8 : pname == GL_MAX_DRAW_BUFFERS ? 4 : 0;
+}
+static void fake_deletefb(GLsizei, const GLuint*) {}
+static GLenum selected_read=GL_COLOR_ATTACHMENT0;
+static void fake_readbuffer(GLenum value) {++read_calls;selected_read=value;}
+static GLenum fake_checkfb(GLenum) { return GL_FRAMEBUFFER_COMPLETE; }
+static GLenum fake_geterror() { return GL_NO_ERROR; }
+static void fake_blit(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum) {}
+
+static int fails = 0;
+static void expect(const char* what, GLuint got, GLuint want) {
+    if (got != want) { printf("  FAIL %-50s physical=%u expected=%u\n", what, got, want); ++fails; }
+}
+
+int main() {
+    GLES.glBindFramebuffer       = fake_bind_fb;
+    GLES.glFramebufferTexture2D  = fake_fbtex2d;
+    GLES.glFramebufferRenderbuffer = fake_fbrb;
+    GLES.glFramebufferTextureLayer = fake_fblayer;
+    GLES.glFramebufferTexture    = fake_fbtex;
+    GLES.glDrawBuffers           = fake_drawbuffers;
+    GLES.glGetIntegerv           = fake_getintegerv;
+    GLES.glDeleteFramebuffers    = fake_deletefb;
+    GLES.glReadBuffer            = fake_readbuffer;
+    GLES.glCheckFramebufferStatus= fake_checkfb;
+    GLES.glGetError              = fake_geterror;
+    GLES.glBlitFramebuffer       = fake_blit;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 7);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 100, 0); // colortex0
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 101, 0); // colortex1
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, 102, 0); // colortex2
+
+    printf("1. identity order leaves everything alone\n");
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1}; glDrawBuffers(2, b); }
+    expect("slot0 holds colortex0", physical[0], 100);
+    expect("slot1 holds colortex1", physical[1], 101);
+
+    printf("2. swap: slot0 must receive colortex1, slot1 colortex0\n");
+    { GLenum b[] = {GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT0}; glDrawBuffers(2, b); }
+    expect("slot0 holds colortex1", physical[0], 101);
+    expect("slot1 holds colortex0", physical[1], 100);
+
+    printf("3. back to identity -- the regression a75f818 half-fixed\n");
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1}; glDrawBuffers(2, b); }
+    expect("slot0 back to colortex0", physical[0], 100);
+    expect("slot1 back to colortex1", physical[1], 101);
+
+    printf("4. single non-identity target -- the destination-victim case\n");
+    { GLenum b[] = {GL_COLOR_ATTACHMENT1}; glDrawBuffers(1, b); }
+    expect("slot0 holds colortex1", physical[0], 101);
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0}; glDrawBuffers(1, b); }
+    expect("slot0 back to colortex0", physical[0], 100);
+    expect("slot1 back to colortex1", physical[1], 101);
+
+    printf("5. shuffle -> different shuffle, without an identity in between\n");
+    { GLenum b[] = {GL_COLOR_ATTACHMENT2}; glDrawBuffers(1, b); }
+    expect("slot0 holds colortex2", physical[0], 102);
+    { GLenum b[] = {GL_COLOR_ATTACHMENT1}; glDrawBuffers(1, b); }
+    expect("slot0 holds colortex1", physical[0], 101);
+    expect("slot2 back to colortex2", physical[2], 102);
+
+    printf("6. a renderbuffer attachment survives a call that must not move it\n");
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 900);
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1}; glDrawBuffers(2, b); }
+    expect("slot0 still the renderbuffer", physical[0], 900);
+
+    printf("7. a record survives the table growing under it\n");
+    // Every scenario above uses one framebuffer, so until here nothing had ever
+    // made the table grow. Sixty-four more names take it through several
+    // rehashes and then come back to fbo 7, which must still know its home
+    // attachments.
+    //
+    // This does not reproduce a reference held across an insert -- the case the
+    // unique_ptr in the table exists for. It passes with or without it, because
+    // no path in framebuffer.cpp currently keeps a framebuffer_t& while asking
+    // for a different name; the pointer there is precaution, not load-bearing.
+    // What this does catch is a record being lost or corrupted by the growth
+    // itself, which nothing else covers.
+    for (GLuint extra = 100; extra < 164; ++extra) {
+        glBindFramebuffer(GL_FRAMEBUFFER, extra);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 7000 + extra, 0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 7);
+    physical.clear();
+    { GLenum b[] = {GL_COLOR_ATTACHMENT1}; glDrawBuffers(1, b); }
+    expect("slot0 holds colortex1 after 64 inserts", physical[0], 101);
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1}; glDrawBuffers(2, b); }
+    // Scenario 6 left a renderbuffer on attachment 0, so that is what home means
+    // here -- and getting it back is the whole point: the record still knows.
+    expect("slot0 restored to the renderbuffer", physical[0], 900);
+    expect("slot1 restored to colortex1", physical[1], 101);
+
+    printf("8. deleting the framebuffer drops its record\n");
+    { GLuint fb = 7; glDeleteFramebuffers(1, &fb); }
+    glBindFramebuffer(GL_FRAMEBUFFER, 7);          // driver recycles the name
+    physical.clear();
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 555);
+    { GLenum b[] = {GL_COLOR_ATTACHMENT0}; glDrawBuffers(1, b); }
+    expect("recycled name did not inherit colortex0", physical[0], 555);
+
+    printf("9. single output uses slot zero even when attachment index exceeds MAX_DRAW_BUFFERS\n");
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT7,GL_TEXTURE_2D,107,0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT7);
+    expect("single draw-buffer count",draw_list.size(),1);
+    expect("single output target",physical[0],107);
+    printf("10. replacing an attachment preserves the active output permutation\n");
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,100,0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,101,0);
+    {GLenum b[]={GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT0};glDrawBuffers(2,b);}
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,201,0);
+    expect("output zero follows replacement",physical[0],201);
+    expect("output one still follows logical zero",physical[1],100);
+    {GLenum b[]={GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT0};glDrawBuffers(2,b);}
+    expect("repeated route keeps replacement image",physical[0],201);
+    printf("11. reading an attachment not selected for drawing retains its image\n");
+    {GLenum b[]={GL_COLOR_ATTACHMENT1};glDrawBuffers(1,b);}
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    expect("read logical zero after shuffle",physical[selected_read-GL_COLOR_ATTACHMENT0],100);
+    const auto attachments_before = attachment_calls, reads_before = read_calls;
+    for (int i = 0; i < 128; ++i) glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    printf("stable draw route: attachments=%u read_selection=%u\n",
+           attachment_calls - attachments_before, read_calls - reads_before);
+    expect("unchanged route does not reattach images", attachment_calls - attachments_before, 0);
+    expect("unchanged route does not reset read selection", read_calls - reads_before, 0);
+    reject_draws = 1;
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    expect("rejected route still selects logical one", physical[0], 201);
+    expect("rejected route preserves logical zero for reading", physical[selected_read-GL_COLOR_ATTACHMENT0], 100);
+    expect("rejected route reports driver error", reported_error, GL_INVALID_OPERATION);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    expect("retry selects logical zero", physical[0], 100);
+    const auto changed_attachments = attachment_calls;
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    expect("two displaced slots only", attachment_calls - changed_attachments, 2);
+    const auto invalid_attachments = attachment_calls;
+    {GLenum duplicate[]={GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT1};glDrawBuffers(2,duplicate);}
+    expect("invalid route does not touch attachments", attachment_calls, invalid_attachments);
+    expect("invalid route remains visible", reported_error, GL_INVALID_OPERATION);
+    glDrawBuffers(0,nullptr);
+    glDrawBuffers(0,nullptr);
+    expect("repeated empty routing is valid", draw_list.size(), 0);
+    printf("\n%s (%d failures)\n", fails ? "FAILED" : "all checks passed", fails);
+    return fails != 0;
+}

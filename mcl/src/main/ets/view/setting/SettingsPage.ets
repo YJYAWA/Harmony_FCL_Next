@@ -2,13 +2,13 @@
  * 设置页面
  * 移植自: FCL/ui/setting/ + FCL/setting/
  */
-import { SettingsManager, LauncherSettings, Theme, DownloadSource, Language }
+import { SettingsManager, LauncherSettings, Theme, DownloadSource }
   from '../../core/SettingsManager';
 import { promptAction } from '@kit.ArkUI';
 
 @ComponentV2
 export struct SettingsPage {
-  @Local settings: LauncherSettings;
+  @Local settings: LauncherSettings = SettingsManager.getInstance().settings;
   private manager: SettingsManager = SettingsManager.getInstance();
 
   aboutToAppear(): void {
@@ -27,41 +27,101 @@ export struct SettingsPage {
         this.buildSection('Downloads');
         this.buildDownloadSourceSelector();
         this.buildSlider('Concurrent downloads', this.settings.downloadConcurrency, 1, 32, 1,
-          (value: number) => { this.settings = { ...this.settings, downloadConcurrency: value }; this.manager.set('downloadConcurrency', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.downloadConcurrency = value;
+            this.settings = s;
+            this.manager.set('downloadConcurrency', value);
+          });
         this.buildSlider('Download threads', this.settings.downloadThreads, 1, 16, 1,
-          (value: number) => { this.settings = { ...this.settings, downloadThreads: value }; this.manager.set('downloadThreads', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.downloadThreads = value;
+            this.settings = s;
+            this.manager.set('downloadThreads', value);
+          });
 
         // 游戏设置
         this.buildSection('Game');
         this.buildSlider('Min Memory (MB)', this.settings.minMemory, 256, 16384, 256,
-          (value: number) => { this.settings = { ...this.settings, minMemory: value }; this.manager.set('minMemory', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.minMemory = value;
+            this.settings = s;
+            this.manager.set('minMemory', value);
+          });
         this.buildSlider('Max Memory (MB)', this.settings.maxMemory, 512, 32768, 512,
-          (value: number) => { this.settings = { ...this.settings, maxMemory: value }; this.manager.set('maxMemory', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.maxMemory = value;
+            this.settings = s;
+            this.manager.set('maxMemory', value);
+          });
         this.buildInputField('Java Path', this.settings.javaPath,
-          (value: string) => { this.settings = { ...this.settings, javaPath: value }; this.manager.set('javaPath', value); });
+          (value: string) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.javaPath = value;
+            this.settings = s;
+            this.manager.set('javaPath', value);
+          });
         this.buildInputField('Extra JVM Args', this.settings.extraJVMArgs,
-          (value: string) => { this.settings = { ...this.settings, extraJVMArgs: value }; this.manager.set('extraJVMArgs', value); });
+          (value: string) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.extraJVMArgs = value;
+            this.settings = s;
+            this.manager.set('extraJVMArgs', value);
+          });
 
         // 窗口设置
         this.buildSection('Window');
         this.buildToggle('Fullscreen', this.settings.fullscreen,
-          (value: boolean) => { this.settings = { ...this.settings, fullscreen: value }; this.manager.set('fullscreen', value); });
+          (value: boolean) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.fullscreen = value;
+            this.settings = s;
+            this.manager.set('fullscreen', value);
+          });
         this.buildSlider('Window Width', this.settings.windowWidth, 640, 3840, 1,
-          (value: number) => { this.settings = { ...this.settings, windowWidth: value }; this.manager.set('windowWidth', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.windowWidth = value;
+            this.settings = s;
+            this.manager.set('windowWidth', value);
+          });
         this.buildSlider('Window Height', this.settings.windowHeight, 480, 2160, 1,
-          (value: number) => { this.settings = { ...this.settings, windowHeight: value }; this.manager.set('windowHeight', value); });
+          (value: number) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.windowHeight = value;
+            this.settings = s;
+            this.manager.set('windowHeight', value);
+          });
 
         // 启动设置
         this.buildSection('Launch');
         this.buildToggle('Auto close launcher', this.settings.autoCloseLauncher,
-          (value: boolean) => { this.settings = { ...this.settings, autoCloseLauncher: value }; this.manager.set('autoCloseLauncher', value); });
+          (value: boolean) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.autoCloseLauncher = value;
+            this.settings = s;
+            this.manager.set('autoCloseLauncher', value);
+          });
         this.buildToggle('Show game logs', this.settings.showLogs,
-          (value: boolean) => { this.settings = { ...this.settings, showLogs: value }; this.manager.set('showLogs', value); });
+          (value: boolean) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.showLogs = value;
+            this.settings = s;
+            this.manager.set('showLogs', value);
+          });
 
         // 调试
         this.buildSection('Debug');
         this.buildToggle('Debug mode', this.settings.debugMode,
-          (value: boolean) => { this.settings = { ...this.settings, debugMode: value }; this.manager.set('debugMode', value); });
+          (value: boolean) => {
+            const s = SettingsManager.cloneSettings(this.settings);
+            s.debugMode = value;
+            this.settings = s;
+            this.manager.set('debugMode', value);
+          });
 
         // 重置按钮
         Button('Reset to Defaults')
@@ -117,7 +177,9 @@ export struct SettingsPage {
               .padding({ left: 12, right: 12, top: 6, bottom: 6 })
               .margin({ left: 4 })
               .onClick(() => {
-                this.settings = { ...this.settings, theme };
+                const s = SettingsManager.cloneSettings(this.settings);
+                s.theme = theme;
+                this.settings = s;
                 this.manager.set('theme', theme);
               })
           }
@@ -141,12 +203,14 @@ export struct SettingsPage {
 
       Select([{ value: 'bmclapi' }, { value: 'official' }, { value: 'mcbbs' }])
         .value(this.settings.downloadSource)
-        .fontSize(14)
+        .font({ size: 14 })
         .selected(this.settings.downloadSource === 'bmclapi' ? 0 :
           this.settings.downloadSource === 'official' ? 1 : 2)
         .onSelect((index: number) => {
           const sources: DownloadSource[] = [DownloadSource.BMCLAPI, DownloadSource.OFFICIAL, DownloadSource.MCBBS];
-          this.settings = { ...this.settings, downloadSource: sources[index] };
+          const s = SettingsManager.cloneSettings(this.settings);
+          s.downloadSource = sources[index];
+          this.settings = s;
           this.manager.set('downloadSource', sources[index]);
         })
     }
@@ -180,7 +244,9 @@ export struct SettingsPage {
             })
             .margin({ left: 6 })
             .onClick(() => {
-              this.settings = { ...this.settings, backgroundColor: color };
+              const s = SettingsManager.cloneSettings(this.settings);
+              s.backgroundColor = color;
+              this.settings = s;
               this.manager.set('backgroundColor', color);
             })
         }

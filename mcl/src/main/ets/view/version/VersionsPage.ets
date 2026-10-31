@@ -5,15 +5,12 @@
 import { VersionManager } from '../../core/game/VersionManager';
 import { BMCLAPIDownloadProvider } from '../../core/download/DownloadProvider';
 import { LibraryAnalyzer } from '../../core/game/LibraryAnalyzer';
-import { GameVersion, ModLoaderType, LaunchConfig } from '../../core/game/GameTypes';
+import { LaunchConfig } from '../../core/game/GameTypes';
 import { FileUtils } from '../../core/util/FileUtils';
 import { SettingsManager } from '../../core/SettingsManager';
 import { GameLauncherService } from '../../service/GameLauncherService';
 import { NavigationService, RouteNames } from '../../common/NavigationRouter';
 import { promptAction } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-const TAG = 'FCL-VersionsPage';
 
 /** 版本 Profile 条目 */
 interface VersionProfile {
@@ -289,11 +286,11 @@ export struct VersionsPage {
   launchVersion(versionId: string): void {
     const config: LaunchConfig = {
       version: versionId, gameDir: FileUtils.getMinecraftDir(),
-      javaPath: this.settings.get('javaPath') || 'java',
-      minMemory: this.settings.get('minMemory'), maxMemory: this.settings.get('maxMemory'),
-      extraJVMArgs: this.settings.get('extraJVMArgs').split(' ').filter(a => a),
-      windowWidth: this.settings.get('windowWidth'), windowHeight: this.settings.get('windowHeight'),
-      fullscreen: this.settings.get('fullscreen'),
+      javaPath: this.settings.settings.javaPath || 'java',
+      minMemory: this.settings.settings.minMemory, maxMemory: this.settings.settings.maxMemory,
+      extraJVMArgs: this.settings.settings.extraJVMArgs.split(' ').filter((a: string): boolean => a.length > 0),
+      windowWidth: this.settings.settings.windowWidth, windowHeight: this.settings.settings.windowHeight,
+      fullscreen: this.settings.settings.fullscreen,
       authUsername: 'Player', authUUID: '00000000-0000-0000-0000-000000000000',
       authAccessToken: 'offline', demo: false
     };

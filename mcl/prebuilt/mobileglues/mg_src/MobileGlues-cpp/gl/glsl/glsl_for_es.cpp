@@ -1,0 +1,1427 @@
+// MobileGlues - gl/glsl/glsl_for_es.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v2.1:
+//   https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
+// SPDX-License-Identifier: LGPL-2.1-only
+// End of Source File Header
+#include "glsl_for_es.h"
+
+#include "../../3rdparty/glslang/glslang/Public/ShaderLang.h"
+#include "../../3rdparty/glslang/glslang/Include/Types.h"
+#include "../../3rdparty/glslang/glslang/MachineIndependent/localintermediate.h"
+#include <spirv_cross/spirv_cross_c.h>
+#include <iostream>
+#include <fstream>
+#include "../log.h"
+#include "../../3rdparty/glslang/SPIRV/GlslangToSpv.h"
+#include <string>
+#include <atomic>
+#include <regex>
+#include <stdexcept>
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+#include <vector>
+#include <mutex>
+#include <set>
+#include <cstring>
+#include <limits>
+#include <charconv>
+#include "cache.h"
+#include "uniform_initializer_core.h"
+#include "../../version.h"
+
+#define DEBUG 0
+
+// Cache-key component describing the *behaviour* of this translator, kept
+// separate from the MobileGlues release version.
+//
+// The key built in GLSLtoGLSLES() already carries MAJOR.MINOR.REVISION, and that
+// is not sufficient: changing what this file emits does not require a version
+// bump, and during development it never gets one. The failure mode is not a
+// stale-looking log line. It is a shader that silently keeps the translation it
+// was given before the change, so the new code appears to do nothing at all.
+//
+// That is precisely what happened when the fragment-output flattening below was
+// restored. AMCL's preset sets maxGlslCacheSize to 32 MB, so the on-disk cache
+// still held entries written before the pass existed; nearly every shader was
+// served a translation without it, only the few that missed the cache showed the
+// new output, and the driver rejected the cached ones with the very error the
+// pass exists to prevent.
+//
+// ⇒ Bump this whenever a change alters the ESSL this file produces. Entries
+// persisted under an older value then stop matching and are evicted by the
+// cache's normal LRU, so no user-visible "clear your cache" step is required --
+// which matters because an installed application's cache directory outlives its
+// upgrade, and asking users to clear it is not a fix.
+//
+// Cost, stated plainly: the first launch after a bump re-translates every shader
+// because the whole persisted cache misses. That is one slower startup, and it
+// is the price of never serving a translation the current code would not produce.
+//
+// Revision history, so a bump is never mistaken for a no-op:
+//   t1  the fragment-output flattening pass this comment was written for.
+//   t2  process_uniform_declarations() became token-aware and fail-closed. The
+//       previous substring scan corrupted twelve Minecraft 26.3 snapshot 9
+//       terrain fragment shaders, and those corrupted translations were already
+//       persisted on devices; without this bump an upgraded install keeps
+//       serving them and the fix appears to do nothing at all.
+//
+// Never reuse or lower a value: an old entry that becomes reachable again is a
+// translation the current code would not produce. Always advance the revision.
+//   t3恢复shader/program对象语义、source binding metadata与失败传播。
+// t4曾用于本轮隔离initializer候选；缺少完整性证明的实验cache仍保留为负控。
+// t5在每份转译ESSL中写入完整初值计数和终止证明（包括零项），不能复用t4旧格式。
+#define GLSL_TRANSLATOR_REVISION 5
+
+namespace {
+thread_local std::string translation_error;
+std::once_flag glslang_once;
+void ensure_glslang() { std::call_once(glslang_once, [] {
+    if (!glslang::InitializeProcess()) throw std::runtime_error("glslang initialization failed");
+}); }
+}
+std::string mg_translation_error() { return translation_error; }
+
+void mg_read_translation_metadata(const std::string& essl, mg_glsl_metadata& metadata) {
+    metadata = {};
+    std::istringstream lines(essl);
+    std::string line, tag;
+    bool began = false, ended = false;
+    unsigned expected_initializers = 0;
+    std::set<std::string> initializer_names;
+    const auto number = [](std::istringstream& input, std::uint32_t& value) {
+        std::string token;
+        if (!(input >> token)) return false;
+        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+        return parsed.ec == std::errc{} && parsed.ptr == token.data() + token.size();
+    };
+    while (std::getline(lines, line)) {
+        std::istringstream fields(line);
+        fields >> tag;
+        if (tag == "//MG_BIND") {
+            mg_glsl_binding binding;
+            if (fields >> binding.kind >> binding.binding >> binding.count >> binding.name)
+                metadata.bindings.push_back(std::move(binding));
+        } else if (tag == "//MG_BUFFER") {
+            std::string name;
+            if (fields >> name) metadata.buffer_samplers.push_back(std::move(name));
+        } else if (tag == "//MG_INIT_BEGIN" || tag == "//MG_INIT_END") {
+            std::uint32_t count = 0;
+            std::string extra;
+            if (!number(fields, count) || (fields >> extra)) {
+                metadata.initializer_failure = "Invalid uniform initializer envelope"; return;
+            }
+            if (tag == "//MG_INIT_BEGIN") {
+                if (began || ended) { metadata.initializer_failure = "Duplicate uniform initializer begin"; return; }
+                began = true; expected_initializers = count;
+            } else {
+                if (!began || ended || count != expected_initializers || metadata.initializers.size() != count) {
+                    metadata.initializer_failure = "Incomplete or duplicate uniform initializer end"; return;
+                }
+                ended = true;
+            }
+        } else if (tag == "//MG_INIT") {
+            // Cache外层只检查key/长度/NUL。新schema必须证明所有初值行都到齐，不能把丢行当无初值。
+            if (!began || ended || metadata.initializers.size() >= expected_initializers) {
+                metadata.initializer_failure = "Uniform initializer outside its complete envelope"; return;
+            }
+            mg_glsl_metadata::initializer value;
+            unsigned count = 0;
+            if (!(fields >> value.kind >> value.columns >> value.rows >> value.name >> count) ||
+                (value.kind != 'f' && value.kind != 'i' && value.kind != 'u') ||
+                value.columns < 1 || value.columns > 4 || value.rows < 1 || value.rows > 4 ||
+                (value.columns > 1 && (value.kind != 'f' || value.rows < 2)) ||
+                count != value.columns * value.rows) {
+                metadata.initializer_failure = "Invalid cached uniform initializer shape"; return;
+            }
+            value.bits.resize(count);
+            for (auto& bits : value.bits) {
+                std::string token;
+                if (!(fields >> token)) { metadata.initializer_failure = "Truncated cached uniform initializer value"; return; }
+                const auto parsed = std::from_chars(token.data(), token.data() + token.size(), bits);
+                if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size()) {
+                    metadata.initializer_failure = "Invalid cached uniform initializer bits"; return;
+                }
+            }
+            std::string extra;
+            if (fields >> extra) { metadata.initializer_failure = "Trailing cached uniform initializer data"; return; }
+            if (!initializer_names.insert(value.name).second) {
+                metadata.initializer_failure = "Duplicate cached uniform initializer name"; return;
+            }
+            metadata.initializers.push_back(std::move(value));
+        }
+    }
+    if (!began || !ended) metadata.initializer_failure = "Missing uniform initializer completeness envelope";
+}
+
+static TBuiltInResource InitResources() {
+    TBuiltInResource Resources{};
+
+    Resources.maxLights = 32;
+    Resources.maxClipPlanes = 6;
+    Resources.maxTextureUnits = 32;
+    Resources.maxTextureCoords = 32;
+    Resources.maxVertexAttribs = 64;
+    Resources.maxVertexUniformComponents = 4096;
+    Resources.maxVaryingFloats = 64;
+    Resources.maxVertexTextureImageUnits = 32;
+    Resources.maxCombinedTextureImageUnits = 80;
+    Resources.maxTextureImageUnits = 32;
+    Resources.maxFragmentUniformComponents = 4096;
+    Resources.maxDrawBuffers = 32;
+    Resources.maxVertexUniformVectors = 128;
+    Resources.maxVaryingVectors = 8;
+    Resources.maxFragmentUniformVectors = 16;
+    Resources.maxVertexOutputVectors = 16;
+    Resources.maxFragmentInputVectors = 15;
+    Resources.minProgramTexelOffset = -8;
+    Resources.maxProgramTexelOffset = 7;
+    Resources.maxClipDistances = 8;
+    Resources.maxComputeWorkGroupCountX = 65535;
+    Resources.maxComputeWorkGroupCountY = 65535;
+    Resources.maxComputeWorkGroupCountZ = 65535;
+    Resources.maxComputeWorkGroupSizeX = 1024;
+    Resources.maxComputeWorkGroupSizeY = 1024;
+    Resources.maxComputeWorkGroupSizeZ = 64;
+    Resources.maxComputeUniformComponents = 1024;
+    Resources.maxComputeTextureImageUnits = 16;
+    Resources.maxComputeImageUniforms = 8;
+    Resources.maxComputeAtomicCounters = 8;
+    Resources.maxComputeAtomicCounterBuffers = 1;
+    Resources.maxVaryingComponents = 60;
+    Resources.maxVertexOutputComponents = 64;
+    Resources.maxGeometryInputComponents = 64;
+    Resources.maxGeometryOutputComponents = 128;
+    Resources.maxFragmentInputComponents = 128;
+    Resources.maxImageUnits = 8;
+    Resources.maxCombinedImageUnitsAndFragmentOutputs = 8;
+    Resources.maxCombinedShaderOutputResources = 8;
+    Resources.maxImageSamples = 0;
+    Resources.maxVertexImageUniforms = 0;
+    Resources.maxTessControlImageUniforms = 0;
+    Resources.maxTessEvaluationImageUniforms = 0;
+    Resources.maxGeometryImageUniforms = 0;
+    Resources.maxFragmentImageUniforms = 8;
+    Resources.maxCombinedImageUniforms = 8;
+    Resources.maxGeometryTextureImageUnits = 16;
+    Resources.maxGeometryOutputVertices = 256;
+    Resources.maxGeometryTotalOutputComponents = 1024;
+    Resources.maxGeometryUniformComponents = 1024;
+    Resources.maxGeometryVaryingComponents = 64;
+    Resources.maxTessControlInputComponents = 128;
+    Resources.maxTessControlOutputComponents = 128;
+    Resources.maxTessControlTextureImageUnits = 16;
+    Resources.maxTessControlUniformComponents = 1024;
+    Resources.maxTessControlTotalOutputComponents = 4096;
+    Resources.maxTessEvaluationInputComponents = 128;
+    Resources.maxTessEvaluationOutputComponents = 128;
+    Resources.maxTessEvaluationTextureImageUnits = 16;
+    Resources.maxTessEvaluationUniformComponents = 1024;
+    Resources.maxTessPatchComponents = 120;
+    Resources.maxPatchVertices = 32;
+    Resources.maxTessGenLevel = 64;
+    Resources.maxViewports = 16;
+    Resources.maxVertexAtomicCounters = 0;
+    Resources.maxTessControlAtomicCounters = 0;
+    Resources.maxTessEvaluationAtomicCounters = 0;
+    Resources.maxGeometryAtomicCounters = 0;
+    Resources.maxFragmentAtomicCounters = 8;
+    Resources.maxCombinedAtomicCounters = 8;
+    Resources.maxAtomicCounterBindings = 1;
+    Resources.maxVertexAtomicCounterBuffers = 0;
+    Resources.maxTessControlAtomicCounterBuffers = 0;
+    Resources.maxTessEvaluationAtomicCounterBuffers = 0;
+    Resources.maxGeometryAtomicCounterBuffers = 0;
+    Resources.maxFragmentAtomicCounterBuffers = 1;
+    Resources.maxCombinedAtomicCounterBuffers = 1;
+    Resources.maxAtomicCounterBufferSize = 16384;
+    Resources.maxTransformFeedbackBuffers = 4;
+    Resources.maxTransformFeedbackInterleavedComponents = 64;
+    Resources.maxCullDistances = 8;
+    Resources.maxCombinedClipAndCullDistances = 8;
+    Resources.maxSamples = 4;
+    Resources.maxMeshOutputVerticesNV = 256;
+    Resources.maxMeshOutputPrimitivesNV = 512;
+    Resources.maxMeshWorkGroupSizeX_NV = 32;
+    Resources.maxMeshWorkGroupSizeY_NV = 1;
+    Resources.maxMeshWorkGroupSizeZ_NV = 1;
+    Resources.maxTaskWorkGroupSizeX_NV = 32;
+    Resources.maxTaskWorkGroupSizeY_NV = 1;
+    Resources.maxTaskWorkGroupSizeZ_NV = 1;
+    Resources.maxMeshViewCountNV = 4;
+
+    Resources.limits.nonInductiveForLoops = true;
+    Resources.limits.whileLoops = true;
+    Resources.limits.doWhileLoops = true;
+    Resources.limits.generalUniformIndexing = true;
+    Resources.limits.generalAttributeMatrixVectorIndexing = true;
+    Resources.limits.generalVaryingIndexing = true;
+    Resources.limits.generalSamplerIndexing = true;
+    Resources.limits.generalVariableIndexing = true;
+    Resources.limits.generalConstantMatrixVectorIndexing = true;
+
+    // Ten fields this table never set, left at 0 by the value-initialisation
+    // above. Nine are mesh-shader limits that glslang only reads when a shader
+    // asks for them, so 0 was harmless. maxDualSourceDrawBuffersEXT was not:
+    // glslang emits
+    //     mediump vec4 gl_SecondaryFragDataEXT[gl_MaxDualSourceDrawBuffersEXT];
+    // into the ESSL built-in block, and an array sized 0 fails to parse -- which
+    // fails the whole built-in table, so every shader routed through glslang was
+    // rejected with "unsupported shader version". It only showed on a context
+    // whose ESSL version is below the shader's, since a shader the driver can
+    // take is passed straight through; ANGLE presents ES 3.1, so turning ANGLE on
+    // meant nothing using #version 320 es could compile at all.
+    //
+    // The values are glslang's own defaults (glslang/ResourceLimits.cpp).
+    Resources.maxDualSourceDrawBuffersEXT = 1;
+    Resources.maxMeshOutputVerticesEXT = 256;
+    Resources.maxMeshOutputPrimitivesEXT = 256;
+    Resources.maxMeshWorkGroupSizeX_EXT = 128;
+    Resources.maxMeshWorkGroupSizeY_EXT = 128;
+    Resources.maxMeshWorkGroupSizeZ_EXT = 128;
+    Resources.maxTaskWorkGroupSizeX_EXT = 128;
+    Resources.maxTaskWorkGroupSizeY_EXT = 128;
+    Resources.maxTaskWorkGroupSizeZ_EXT = 128;
+    Resources.maxMeshViewCountEXT = 4;
+
+    return Resources;
+}
+
+int getGLSLVersion(const char* glsl_code) {
+    std::string code(glsl_code);
+    static std::regex version_pattern(R"(#version\s+(\d{3}))");
+    std::smatch match;
+    if (std::regex_search(code, match, version_pattern)) {
+        return std::stoi(match[1].str());
+    }
+
+    return -1;
+}
+
+std::string forceSupporterOutput(const std::string& glslCode) {
+    bool hasPrecisionFloat =
+        glslCode.find("precision ") != std::string::npos && glslCode.find("float;") != std::string::npos;
+    bool hasPrecisionInt =
+        glslCode.find("precision ") != std::string::npos && glslCode.find("int;") != std::string::npos;
+
+    std::string result = glslCode;
+    std::string precisionFloat;
+    std::string precisionInt;
+
+    if (hasPrecisionFloat && hasPrecisionInt) {
+        std::istringstream iss(result);
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(iss, line)) {
+            bool isPrecisionLine = (line.find("precision ") != std::string::npos) &&
+                                   (line.find("float;") != std::string::npos || line.find("int;") != std::string::npos);
+            if (!isPrecisionLine) {
+                lines.push_back(line);
+            }
+        }
+        result.clear();
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i != 0) result += '\n';
+            result += lines[i];
+        }
+        precisionFloat = "precision highp float;\n";
+        precisionInt = "precision highp int;\n";
+    } else {
+        precisionFloat = hasPrecisionFloat ? "" : "precision highp float;\n";
+        precisionInt = hasPrecisionInt ? "" : "precision highp int;\n";
+    }
+
+    size_t lastExtensionPos = result.rfind("#extension");
+    size_t insertionPos = 0;
+
+    if (lastExtensionPos != std::string::npos) {
+        size_t nextNewline = result.find('\n', lastExtensionPos);
+        if (nextNewline != std::string::npos) {
+            insertionPos = nextNewline + 1;
+        } else {
+            insertionPos = result.length();
+        }
+    } else {
+        size_t firstNewline = result.find('\n');
+        if (firstNewline != std::string::npos) {
+            insertionPos = firstNewline + 1;
+        } else {
+            result = precisionFloat + precisionInt + result;
+            return result;
+        }
+    }
+
+    result.insert(insertionPos, precisionFloat + precisionInt);
+    return result;
+}
+
+std::string removeLayoutBinding(const std::string& glslCode) {
+    static std::regex bindingRegex(R"(layout\s*\(\s*binding\s*=\s*\d+\s*\)\s*)");
+    std::string result = std::regex_replace(glslCode, bindingRegex, "");
+    static std::regex bindingRegex2(R"(layout\s*\(\s*binding\s*=\s*\d+\s*,)");
+    result = std::regex_replace(result, bindingRegex2, "layout(");
+    return result;
+}
+
+void trim(std::string& str) {
+    str.erase(str.begin(), std::find_if(str.begin(), str.end(), [](int ch) { return !std::isspace(ch); }));
+    str.erase(std::find_if(str.rbegin(), str.rend(), [](int ch) { return !std::isspace(ch); }).base(), str.end());
+}
+
+// Strip initializers from global uniform declarations, which GLSL ES forbids
+// (ESSL 3.00/3.20 section 4.3.5) while desktop GLSL allows them.
+//
+// The pass itself is unchanged in purpose; the rewriter it delegates to is not.
+// The previous version matched `uniform` as a substring at any character
+// position and treated any `=` before the next `;` as an initializer, so on
+// Minecraft 26.3 snapshot 9 it started inside SPIRV-Cross's
+// `_uniform_instance_00_01`, accepted the `==` of an `if` condition, and
+// swallowed the condition together with the first local declaration of the
+// branch -- twelve unusable terrain fragment programs and an immediate exit. The
+// reasoning, the fail-closed rules and the lexer live in
+// uniform_initializer_core.h, which has no dependency past the standard library
+// precisely so those rules can be exercised without a device.
+//
+// Nothing driver-, platform- or application-specific belongs in here: the
+// restriction is in the ES specification and the defect was lexical.
+std::string process_uniform_declarations(const std::string& glslCode) {
+    mg::glsl::UniformInitializerRewrite rewrite = mg::glsl::stripGlobalUniformInitializers(glslCode);
+    const mg::glsl::UniformInitializerStats& stats = rewrite.stats;
+
+    // Process-wide cumulative counters, reported rather than a per-shader line
+    // or a one-shot "pass is active" line.
+    //
+    // Per-shader would be several hundred lines of noise. A one-shot readiness
+    // line would be worse than that: a channel that is up but has never carried
+    // an event reads exactly like one that works. These only go up, so the log
+    // says how much was actually processed.
+    //
+    // They exist because of what the first device run of this fix looked like.
+    // Vanilla Minecraft 26.3 declares no uniform initializers anywhere, so a
+    // line conditioned on "stripped something" can never appear on that
+    // workload -- and the run therefore carried no direct evidence that the new
+    // rewriter had run, only the absence of the old corruption. Absence of a
+    // symptom is not presence of a fix.
+    //
+    // Note the line is emitted from the translation path, so a session served
+    // entirely from the persisted cache produces none of it. That is the
+    // intended reading: it distinguishes "translated N shaders" from "translated
+    // nothing because everything was cached", which a readiness line could not.
+    static std::atomic<unsigned long long> total_shaders{0};
+    static std::atomic<unsigned long long> total_seen{0};
+    static std::atomic<unsigned long long> total_stripped{0};
+    static std::atomic<unsigned long long> total_declined{0};
+
+    const unsigned long long shaders = total_shaders.fetch_add(1) + 1;
+    const unsigned long long seen = total_seen.fetch_add(stats.seen) + stats.seen;
+    const unsigned long long stripped = total_stripped.fetch_add(stats.stripped) + stats.stripped;
+    const unsigned long long declined =
+        total_declined.fetch_add(stats.unhandled_with_initializer) + stats.unhandled_with_initializer;
+
+    // The first translated shader always reports, so the pass is provable on a
+    // workload it never rewrites; after that only a change in what matters.
+    if (shaders == 1 || stats.stripped > 0 || stats.unhandled_with_initializer > 0) {
+        LOG_I("[Shader] Token-aware uniform initializer pass t%d: shaders=%llu uniform_tokens=%llu stripped=%llu "
+              "declined_with_initializer=%llu",
+              GLSL_TRANSLATOR_REVISION, shaders, seen, stripped, declined)
+    }
+    // The case worth a shipping-build warning is narrow on purpose: a uniform
+    // with no initializer is the norm and says nothing, whereas one this pass
+    // declined to touch *while an initializer is present* is about to be
+    // rejected by the driver, and that rejection has to be traceable to here
+    // rather than looking like an unexplained shader error.
+    if (stats.unhandled_with_initializer > 0) {
+        LOG_W_FORCE("[Shader] Left %d global uniform declaration(s) that appear to carry an initializer unchanged; "
+                    "the driver may reject them (ESSL 4.3.5). Shapes not rewritten: declarator %d, interface block "
+                    "%d, multiple declarators %d, preprocessor %d, unterminated %d",
+                    static_cast<int>(stats.unhandled_with_initializer),
+                    static_cast<int>(stats.unhandled_declarator),
+                    static_cast<int>(stats.unhandled_interface_block),
+                    static_cast<int>(stats.unhandled_multiple_declarators),
+                    static_cast<int>(stats.unhandled_preprocessor),
+                    static_cast<int>(stats.unhandled_unterminated))
+    }
+    return std::move(rewrite.code);
+}
+
+std::string processOutColorLocations(const std::string& glslCode) {
+    const static std::regex pattern(R"(\n(out highp vec4 outColor)(\d+);)");
+    const std::string replacement = "\nlayout(location=$2) $1$2;";
+    return std::regex_replace(glslCode, pattern, replacement);
+}
+
+// ---------------------------------------------------------------------------
+// Fragment outputs declared as arrays and indexed by a non-constant expression
+// ---------------------------------------------------------------------------
+// GLSL ES forbids this outright -- "Arrays of fragment outputs may only be
+// indexed by a constant integral expression" (ESSL 3.00 / 3.20 section 4.3.6)
+// -- while desktop GLSL permits it. A shader can therefore leave SPIRV-Cross as
+// perfectly valid desktop GLSL and still be rejected by the GLES driver's front
+// end. On Maleoon that reads:
+//
+//   S0015: Outputs declared as arrays may only be indexed by a constant
+//          integral expression.
+//
+// Minecraft 26.3 trips this on nearly every fragment shader, because its new
+// order-independent-transparency include writes the transmittance coefficients
+// through a loop (assets/minecraft/shaders/include/oit_add_transmittance.glsl):
+//
+//   layout(location = 0) out vec4 coeff[COEFF_ATTACHMENT_COUNT];
+//   for (int a = 0; a < COEFF_ATTACHMENT_COUNT; a++)
+//       for (int i = 0; i < 4; i++)
+//           coeff[a][i] = coefficients[a * 4 + i];
+//
+// Neither stage of this translator can absorb it: the loop survives the SPIR-V
+// round trip (there is no SPIRV-Tools in this tree to unroll it), and
+// SPIRV-Cross has no option for flattening plain I/O arrays --
+// FORCE_FLATTENED_IO_BLOCKS only covers interface blocks.
+//
+// So rewrite the declaration rather than the code that uses it:
+//
+//   layout(location = L) out T name[N];        // illegal to index dynamically
+//     ->  layout(location = L+k) out T name__mg_out_k;   // k = 0 .. N-1
+//         T name[N];                           // ordinary global: legal
+//         void main() { mg__orig_main(); name__mg_out_k = name[k]; ... }
+//
+// Every existing read and write of name[...] stays exactly as emitted, because
+// indexing a non-output array dynamically is legal. The values reach the real
+// outputs from a wrapper that runs after the original entry point returns.
+//
+// Why a wrapper instead of appending the copies to the end of main(): the
+// original main() may `return` early, and a `discard` must skip the copy
+// entirely. Wrapping gets both right without analysing control flow.
+//
+// This is a conformance fix in the GLSL-to-ESSL translator, not driver policy:
+// the restriction lives in the ES specification and applies to every ES target.
+// It is therefore deliberately not guarded by MG_PLATFORM_OHOS, and is an
+// upstream candidate.
+//
+// ⚠️ Observability: LOG_W and LOG_E compile to nothing unless DEBUG or
+// GLOBAL_DEBUG is set (gl/log.h), so every event a shipping build must be able
+// to prove or refute uses LOG_I / LOG_W_FORCE instead. The literals below are
+// also the artefact-level evidence that this pass is present in a built .so:
+// the functions have internal linkage and may be inlined away, so a symbol-name
+// probe is not a reliable check -- a string scan of the .so is.
+namespace {
+
+// Three states, deliberately not a bool. `Unparseable` has to stay distinct
+// from `Dynamic` because the correct response differs: a genuinely dynamic
+// index is what this pass exists to rewrite, whereas an index this pass cannot
+// read means the translation unit is not in the shape assumed here -- and
+// restructuring a shader on the strength of a failed parse is the fail-open
+// behaviour that would turn one unreadable declaration into a broken shader.
+enum class IndexExpressionKind {
+    Literal,
+    Dynamic,
+    Unparseable,
+};
+
+IndexExpressionKind classifyIndexExpression(const std::string& code, size_t open_bracket) {
+    const size_t close = code.find(']', open_bracket);
+    if (close == std::string::npos) return IndexExpressionKind::Unparseable;
+    bool digit_seen = false;
+    for (size_t i = open_bracket + 1; i < close; ++i) {
+        const auto c = static_cast<unsigned char>(code[i]);
+        if (std::isdigit(c)) {
+            digit_seen = true;
+        } else if (!std::isspace(c)) {
+            return IndexExpressionKind::Dynamic;
+        }
+    }
+    // "[]" and "[ ]" carry no index at all: unreadable rather than literal zero.
+    return digit_seen ? IndexExpressionKind::Literal : IndexExpressionKind::Unparseable;
+}
+
+struct DynamicUseScan {
+    bool dynamic = false;
+    bool unparseable = false;
+};
+
+// Is `name` indexed by anything other than a literal after its declaration?
+// Whole-identifier matching only, so `coeffScale[i]` never counts as a use of
+// `coeff`, and `mg_coeff[i]` does not either.
+DynamicUseScan scanForDynamicUse(const std::string& code, const std::string& name, size_t from) {
+    DynamicUseScan scan;
+    size_t pos = from;
+    while ((pos = code.find(name, pos)) != std::string::npos) {
+        const size_t after = pos + name.length();
+        const bool left_is_boundary =
+            (pos == 0) || !(std::isalnum(static_cast<unsigned char>(code[pos - 1])) || code[pos - 1] == '_');
+        size_t cursor = after;
+        while (cursor < code.length() && std::isspace(static_cast<unsigned char>(code[cursor]))) ++cursor;
+        if (left_is_boundary && cursor < code.length() && code[cursor] == '[') {
+            switch (classifyIndexExpression(code, cursor)) {
+            case IndexExpressionKind::Dynamic:
+                scan.dynamic = true;
+                break;
+            case IndexExpressionKind::Unparseable:
+                scan.unparseable = true;
+                break;
+            case IndexExpressionKind::Literal:
+                break;
+            }
+        }
+        pos = after;
+    }
+    return scan;
+}
+
+struct ArrayOutputDecl {
+    size_t pos = 0;
+    size_t length = 0;
+    int location = 0;
+    int count = 0;
+    std::string qualifiers;
+    std::string precision;
+    std::string type;
+    std::string name;
+};
+
+// Upper bound on the outputs a single declaration may expand into. It mirrors
+// TBuiltInResource::maxDrawBuffers set above; a larger array cannot be a legal
+// fragment output set on any target this translator emits for, so such a
+// declaration is treated as one this pass does not understand rather than
+// silently emitting 33+ outputs.
+constexpr int kMaxFragmentOutputArraySize = 32;
+
+const char* const kOriginalEntryPoint = "mg__orig_main";
+
+// Interpolation and auxiliary storage qualifiers are captured so they can be
+// carried onto every scalar output the rewrite emits. Dropping `flat` would
+// silently change interpolation, and for integer outputs `flat` is mandatory --
+// losing it turns a legal shader into an illegal one.
+std::vector<ArrayOutputDecl> collectRewritableArrayOutputs(const std::string& essl) {
+    static const std::regex decl_pattern(
+        R"(layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*)"
+        R"(((?:(?:flat|smooth|noperspective|centroid|sample)\s+)*))"
+        R"(out\s+((?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)\s*\[\s*(\d+)\s*\]\s*;)");
+
+    std::vector<ArrayOutputDecl> decls;
+    const auto end = std::sregex_iterator();
+    for (auto it = std::sregex_iterator(essl.begin(), essl.end(), decl_pattern); it != end; ++it) {
+        const std::smatch& m = *it;
+        ArrayOutputDecl decl;
+        decl.pos = static_cast<size_t>(m.position(0));
+        decl.length = static_cast<size_t>(m.length(0));
+        decl.location = std::atoi(m[1].str().c_str());
+        decl.qualifiers = m[2].str();
+        decl.precision = m[3].matched ? m[3].str() : "";
+        decl.type = m[4].str();
+        decl.name = m[5].str();
+        decl.count = std::atoi(m[6].str().c_str());
+        trim(decl.qualifiers);
+        trim(decl.precision);
+
+        if (decl.count <= 0 || decl.count > kMaxFragmentOutputArraySize) {
+            LOG_W_FORCE("[Shader] Not flattening fragment output array %s[%d]: size outside 1..%d",
+                        decl.name.c_str(), decl.count, kMaxFragmentOutputArraySize)
+            continue;
+        }
+        const DynamicUseScan scan = scanForDynamicUse(essl, decl.name, decl.pos + decl.length);
+        if (scan.unparseable) {
+            LOG_W_FORCE("[Shader] Not flattening fragment output array %s[%d]: an index expression could not be read",
+                        decl.name.c_str(), decl.count)
+            continue;
+        }
+        // Already conforming shaders are passed through byte for byte.
+        if (!scan.dynamic) continue;
+        decls.push_back(std::move(decl));
+    }
+    return decls;
+}
+
+// Report array-output declarations that are dynamically indexed but whose shape
+// the pattern above does not cover -- an unfamiliar qualifier, a non-literal
+// array size, more than one dimension. Without this the driver would reject
+// such a shader with nothing pointing back to this pass, which is precisely how
+// the original defect stayed unexplained for as long as it did.
+void warnAboutUnhandledArrayOutputs(const std::string& essl, const std::vector<ArrayOutputDecl>& handled) {
+    static const std::regex loose_pattern(R"(\bout\b[^;{}]{0,200}?\b(\w+)\s*\[\s*(\w+)\s*\]\s*;)");
+
+    const auto end = std::sregex_iterator();
+    for (auto it = std::sregex_iterator(essl.begin(), essl.end(), loose_pattern); it != end; ++it) {
+        const std::smatch& m = *it;
+        const auto pos = static_cast<size_t>(m.position(0));
+        const auto length = static_cast<size_t>(m.length(0));
+        const bool covered = std::any_of(handled.begin(), handled.end(), [&](const ArrayOutputDecl& decl) {
+            return (decl.pos < pos + length) && (pos < decl.pos + decl.length);
+        });
+        if (covered) continue;
+        const std::string name = m[1].str();
+        if (!scanForDynamicUse(essl, name, pos + length).dynamic) continue;
+        LOG_W_FORCE("[Shader] Fragment output array %s is indexed dynamically but its declaration is not in a shape "
+                    "this translator can rewrite; the driver will reject it (ESSL 4.3.6)",
+                    name.c_str())
+    }
+}
+
+std::string flattenDynamicFragmentOutputArrays(const std::string& essl, GLenum shaderType, int& rewritten) {
+    rewritten = 0;
+    if (shaderType != GL_FRAGMENT_SHADER) return essl;
+    if (essl.find("out") == std::string::npos) return essl;
+
+    const std::vector<ArrayOutputDecl> decls = collectRewritableArrayOutputs(essl);
+    warnAboutUnhandledArrayOutputs(essl, decls);
+    if (decls.empty()) return essl;
+
+    // The wrapper needs a name of its own. Bail out rather than shadow an
+    // existing definition, however unlikely a collision is in generated code.
+    if (essl.find(kOriginalEntryPoint) != std::string::npos) {
+        LOG_W_FORCE("[Shader] Not flattening fragment output arrays: '%s' already exists in the translated shader",
+                    kOriginalEntryPoint)
+        return essl;
+    }
+
+    std::string result;
+    result.reserve(essl.length() + decls.size() * 128);
+    std::string copy_back;
+    size_t cursor = 0;
+    for (const ArrayOutputDecl& decl : decls) {
+        result.append(essl, cursor, decl.pos - cursor);
+
+        const std::string qualifiers = decl.qualifiers.empty() ? "" : decl.qualifiers + " ";
+        const std::string precision = decl.precision.empty() ? "" : decl.precision + " ";
+        for (int k = 0; k < decl.count; ++k) {
+            const std::string element = decl.name + "__mg_out_" + std::to_string(k);
+            result += "layout(location = " + std::to_string(decl.location + k) + ") " + qualifiers + "out " +
+                      precision + decl.type + " " + element + ";\n";
+            copy_back += "    " + element + " = " + decl.name + "[" + std::to_string(k) + "];\n";
+        }
+        // The name the shader body already uses now denotes an ordinary global
+        // array, which may be indexed with anything.
+        result += precision + decl.type + " " + decl.name + "[" + std::to_string(decl.count) + "];";
+
+        cursor = decl.pos + decl.length;
+    }
+    result.append(essl, cursor, std::string::npos);
+
+    // Move the original entry point aside and copy the staging arrays out after
+    // it returns. If the entry point is not in the expected shape, abandon the
+    // whole rewrite: rewritten declarations with no copy-back emitted would be
+    // worse than not touching the shader at all.
+    static const std::regex main_pattern(R"(\bvoid\s+main\s*\(\s*\))");
+    std::smatch main_match;
+    if (!std::regex_search(result, main_match, main_pattern)) {
+        LOG_W_FORCE("[Shader] Cannot flatten dynamically indexed fragment outputs: no 'void main()' found; leaving "
+                    "the shader untouched")
+        return essl;
+    }
+    // Read both out of the match before mutating `result`: the match object
+    // holds iterators into the very string that replace() is about to move.
+    const auto main_pos = static_cast<size_t>(main_match.position(0));
+    const auto main_length = static_cast<size_t>(main_match.length(0));
+    result.replace(main_pos, main_length, std::string("void ") + kOriginalEntryPoint + "()");
+    result += "\nvoid main()\n{\n    ";
+    result += kOriginalEntryPoint;
+    result += "();\n";
+    result += copy_back;
+    result += "}\n";
+
+    // Logged only once the rewrite is known to have been completed. Reporting a
+    // flattened declaration and then bailing out above would leave a log that
+    // contradicts the shader that was actually handed to the driver.
+    for (const ArrayOutputDecl& decl : decls) {
+        // Named locals, not temporaries: LOG_I expands to more than one
+        // statement, so a `(s + " ").c_str()` argument would already be dangling
+        // by the time the second one runs.
+        const std::string qualifiers = decl.qualifiers.empty() ? std::string() : decl.qualifiers + " ";
+        const std::string precision = decl.precision.empty() ? std::string() : decl.precision + " ";
+        LOG_I("[Shader] Flattened dynamically indexed fragment output array: %s%s%s %s[%d] @location=%d",
+              qualifiers.c_str(), precision.c_str(), decl.type.c_str(), decl.name.c_str(), decl.count, decl.location)
+    }
+    rewritten = static_cast<int>(decls.size());
+    return result;
+}
+
+}  // namespace
+
+std::string GLSLtoGLSLES(const char* glsl_code, GLenum glsl_type, uint essl_version, uint glsl_version,
+                         int& return_code, const mg_frag_bindings* outputs) {
+    translation_error.clear();
+    std::string sha256_string(glsl_code);
+    sha256_string += "\n//" + std::to_string(MAJOR) + "." + std::to_string(MINOR) + "." + std::to_string(REVISION) +
+                     "|" + std::to_string(essl_version) + "|t" + std::to_string(GLSL_TRANSLATOR_REVISION) +
+                     "|stage=" + std::to_string(glsl_type) + "|buffer=" +
+                     std::to_string(hardware->emulate_texture_buffer) + "|querylod=" +
+                     std::to_string(g_gles_caps.GL_EXT_texture_query_lod);
+    if (outputs) for (const auto& binding : *outputs)
+        sha256_string += "|out:" + binding.first + "=" + std::to_string(binding.second);
+    std::string cachedESSL;
+    if (Cache::get_instance().get(sha256_string.c_str(), cachedESSL)) {
+        LOG_D("GLSL Hit Cache:\n%s\n-->\n%s", glsl_code, cachedESSL.c_str())
+        return_code = 0;
+        return cachedESSL;
+    }
+
+    return_code = -1;
+    // std::string converted = glsl_version<140? GLSLtoGLSLES_1(glsl_code, glsl_type, essl_version,
+    // return_code):GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code);
+    std::string converted = GLSLtoGLSLES_2(glsl_code, glsl_type, essl_version, return_code, outputs);
+    if (return_code >= 0 && !converted.empty()) {
+        converted = process_uniform_declarations(converted);
+        Cache::get_instance().put(sha256_string.c_str(), converted.c_str());
+    }
+
+    return (return_code >= 0) ? converted : std::string{};
+}
+
+std::string replace_line_starting_with(const std::string& glslCode, const std::string& starting,
+                                       const std::string& substitution = "") {
+    std::string result;
+    size_t length = glslCode.size();
+    size_t start = 0;
+    size_t current = 0;
+
+    auto append_chunk = [&](size_t end) {
+        if (end > start) {
+            result.append(glslCode, start, end - start);
+        }
+    };
+
+    while (current < length) {
+        // Skip whitespace at line begin
+        size_t lineStart = current;
+        while (current < length && (glslCode[current] == ' ' || glslCode[current] == '\t')) {
+            current++;
+        }
+
+        // Check whether #line directive
+        bool isLineDirective = false;
+        if (current + 5 <= length && glslCode.compare(current, 5, "#line") == 0) {
+            isLineDirective = true;
+        }
+
+        // Move to line end
+        while (current < length && glslCode[current] != '\r' && glslCode[current] != '\n') {
+            current++;
+        }
+
+        // Handle carriage return
+        size_t newlineLength = 0;
+        if (current < length) {
+            if (glslCode[current] == '\r') {
+                newlineLength = (current + 1 < length && glslCode[current + 1] == '\n') ? 2 : 1;
+            } else {
+                newlineLength = 1;
+            }
+        }
+
+        if (isLineDirective) {
+            // Find #line directive ->
+            //  1. Append chunk
+            append_chunk(lineStart); // from chunk_begin to before `#line`
+            // 2. Skip this line (incl. \n)
+            current += newlineLength;
+            start = current; // 3. Starting from next line
+
+            result += substitution;
+        } else {
+            // move to a new line
+            current += newlineLength;
+        }
+    }
+
+    // append last block
+    append_chunk(current);
+    return result;
+}
+
+static inline void replace_all(std::string& str, const std::string& from, const std::string& to) {
+    size_t start_pos = 0;
+    while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // Handles case where 'to' is a substring of 'from'
+    }
+}
+
+static size_t find_insertion_point(const std::string& glsl) {
+    size_t pos = 0;
+    size_t insertion_point = 0;
+
+    size_t version_pos = glsl.find("#version");
+    if (version_pos != std::string::npos) {
+        size_t version_end = glsl.find('\n', version_pos);
+        if (version_end == std::string::npos) {
+            version_end = glsl.length();
+        } else {
+            version_end++;
+        }
+        insertion_point = version_end;
+        pos = version_end;
+    } else {
+        insertion_point = 0;
+        pos = 0;
+    }
+
+    while (pos < glsl.length()) {
+        size_t line_begin = pos;
+        while (pos < glsl.length() && std::isspace(glsl[pos])) {
+            pos++;
+        }
+        if (pos >= glsl.length()) break;
+
+        if (glsl[pos] == '#') {
+            pos++;
+            while (pos < glsl.length() && std::isspace(glsl[pos])) {
+                pos++;
+            }
+            if (glsl.compare(pos, 9, "extension") == 0) {
+                size_t ext_end = glsl.find('\n', pos);
+                if (ext_end == std::string::npos) {
+                    ext_end = glsl.length();
+                } else {
+                    ext_end++;
+                }
+                insertion_point = ext_end;
+                pos = ext_end;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    return insertion_point;
+}
+
+void process_sampler_buffer(std::string& source) { // a simplized version, should be rewritten in the future
+    if (source.find("isamplerBuffer") == std::string::npos) {
+        return;
+    }
+
+    size_t pos = 0;
+    while ((pos = source.find("isamplerBuffer", pos)) != std::string::npos) {
+        source.replace(pos, 14, "isampler2D");
+        pos += 11;
+    }
+
+    std::regex pattern(R"(texelFetch\s*\(\s*(\w+)\s*,\s*([^)]+?)\s*\))");
+    source = std::regex_replace(source, pattern,
+                                "texelFetch($1, ivec2(($2) % u_BufferTexWidth, ($2) / u_BufferTexWidth), 0)");
+
+    const char* boundaryProtection = R"(
+ivec2 bufferCoords(int index) {
+    int width = u_BufferTexWidth;
+    int x = index % width;
+    int y = index / width;
+    if (y >= u_BufferTexHeight) {
+        y = u_BufferTexHeight - 1;
+        x = width - 1;
+    }
+    return ivec2(x, y);
+}
+)";
+
+    source = std::regex_replace(source, std::regex("texelFetch\\((\\w+)\\s*,\\s*ivec2\\(([^)]+)\\)\\s*,\\s*0\\)"),
+                                "texelFetch($1, bufferCoords($2), 0)");
+
+    size_t insertion_point = find_insertion_point(source);
+    if (insertion_point != std::string::npos) {
+        source.insert(insertion_point, boundaryProtection);
+    }
+
+    const char* uniformDecl = R"(
+uniform int u_BufferTexWidth;
+uniform int u_BufferTexHeight;
+)";
+
+    insertion_point = find_insertion_point(source);
+    if (insertion_point != std::string::npos) {
+        insertion_point = source.find('\n', insertion_point);
+        if (insertion_point != std::string::npos) {
+            source.insert(insertion_point + 1, uniformDecl);
+        }
+    }
+}
+
+static void inject_textureQueryLod(std::string& glsl) {
+    const std::regex defRegex(R"(vec2\s+mg_textureQueryLod\s*\()", std::regex::ECMAScript);
+
+    if (glsl.find("textureQueryLod") == std::string::npos) {
+        return;
+    }
+    if (std::regex_search(glsl, defRegex)) {
+        return;
+    }
+
+    const std::string textureQueryLodImpl = R"(
+#define textureQueryLod mg_textureQueryLod
+
+vec2 mg_textureQueryLod(sampler2D tex, vec2 uv) {
+    vec2 texSizeF = vec2(textureSize(tex, 0));
+    vec2 dFdx_uv = dFdx(uv * texSizeF);
+    vec2 dFdy_uv = dFdy(uv * texSizeF);
+    float maxDerivative = max(length(dFdx_uv), length(dFdy_uv));
+    float lod = log2(maxDerivative);
+    return vec2(lod);
+}
+)";
+
+    size_t insertPos = find_insertion_point(glsl);
+    glsl.insert(insertPos, "\n" + textureQueryLodImpl + "\n");
+}
+
+static inline void inject_temporal_filter(std::string& glsl) {
+    const std::regex defRegex(R"(vec4\s+GI_TemporalFilter\s*\()", std::regex::ECMAScript);
+
+    if (glsl.find("GI_TemporalFilter") == std::string::npos) {
+        return;
+    }
+    if (std::regex_search(glsl, defRegex)) {
+        return;
+    }
+
+    const std::regex uniformRegex(
+        R"(^\s*(?:layout\s*\([^)]*\)\s*)?uniform\s+\w+(?:\s*\[\s*\d+\s*\])?\s+\w+(?:\s*\[\s*\d+\s*\])?\s*;.*$)",
+        std::regex::ECMAScript | std::regex::multiline);
+    std::sregex_iterator it(glsl.begin(), glsl.end(), uniformRegex);
+    std::sregex_iterator end;
+    size_t insertPos = 0;
+    for (; it != end; ++it) {
+        insertPos = it->position() + it->length();
+    }
+
+    const std::string GI_TemporalFilterImpl = R"(
+vec4 GI_TemporalFilter() {
+    vec2 uv = gl_FragCoord.xy / screenSize;
+    uv += taaJitter * pixelSize;
+    vec4 currentGI = texture(colortex0, uv);
+    float depth = texture(depthtex0, uv).r;
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 viewPos = gbufferProjectionInverse * clipPos;
+    viewPos /= viewPos.w;
+    vec4 worldPos = gbufferModelViewInverse * viewPos;
+    vec4 prevClipPos = gbufferPreviousProjection * (gbufferPreviousModelView * worldPos);
+    prevClipPos /= prevClipPos.w;
+    vec2 prevUV = prevClipPos.xy * 0.5 + 0.5;
+    vec4 historyGI = texture(colortex1, prevUV);
+    float difference = length(currentGI.rgb - historyGI.rgb);
+    float thresholdValue = 0.1;
+    float adaptiveBlend = mix(0.9, 0.0, smoothstep(thresholdValue, thresholdValue * 2.0, difference));
+    vec4 filteredGI = mix(currentGI, historyGI, adaptiveBlend);
+    if (difference > thresholdValue * 2.0) {
+        filteredGI = currentGI;
+    }
+    return filteredGI;
+}
+)";
+    glsl.insert(insertPos, "\n" + GI_TemporalFilterImpl + "\n");
+}
+#define xstr(s) str(s)
+#define str(s) #s
+
+void inject_mg_macro_definition(std::string& glslCode) {
+    std::string macro_definitions =
+        "\n#define MG_MOBILEGLUES\n"
+        "#define MG_MOBILEGLUES_VERSION " xstr(MAJOR) xstr(MINOR) xstr(REVISION) xstr(PATCH) "\n";
+
+    size_t versionPos = glslCode.rfind("#version");
+    size_t insertionPos = 0;
+
+    if (versionPos != std::string::npos) {
+        size_t nextNewline = glslCode.find('\n', versionPos);
+        insertionPos = (nextNewline != std::string::npos) ? nextNewline + 1 : glslCode.length();
+    } else {
+        size_t firstNewline = glslCode.find('\n');
+        insertionPos = (firstNewline != std::string::npos) ? firstNewline + 1 : 0;
+    }
+
+    glslCode.insert(insertionPos, macro_definitions);
+}
+
+std::string preprocess_glsl(const std::string& glsl, GLenum shaderType) {
+    std::string ret = glsl;
+    // Remove lines beginning with `#line`
+    ret = replace_line_starting_with(ret, "#line");
+    // Act as if disable_GL_ARB_derivative_control is false
+    replace_all(ret, "#ifdef GL_ARB_derivative_control", "#if 0");
+    replace_all(ret, "#ifndef GL_ARB_derivative_control", "#if 1");
+
+    // Polyfill transpose()
+    replace_all(ret, "const mat3 rotInverse = transpose(rot);",
+                "const mat3 rotInverse = mat3(rot[0][0], rot[1][0], rot[2][0], rot[0][1], rot[1][1], rot[2][1], "
+                "rot[0][2], rot[1][2], rot[2][2]);");
+
+    // GI_TemporalFilter injection
+    inject_temporal_filter(ret);
+
+    // textureQueryLod injection
+    if (!g_gles_caps.GL_EXT_texture_query_lod) {
+        inject_textureQueryLod(ret);
+    }
+
+    // MobileGlues macros injection
+    inject_mg_macro_definition(ret);
+
+    if (hardware->emulate_texture_buffer) {
+        // Sampler buffer processing
+        process_sampler_buffer(ret);
+    }
+
+    return ret;
+}
+
+int get_or_add_glsl_version(std::string& glsl) {
+    int glsl_version = getGLSLVersion(glsl.c_str());
+    if (glsl_version == -1) {
+        glsl_version = 150;
+        glsl.insert(0, "#version 150\n");
+    } else if (glsl_version < 140) {
+        // force upgrade glsl version
+        glsl = replace_line_starting_with(glsl, "#version", "#version 150 compatibility\n");
+        glsl_version = 150;
+    }
+
+    LOG_D("GLSL version: %d", glsl_version)
+    return glsl_version;
+}
+
+namespace {
+class SourceBindings : public glslang::TIntermTraverser {
+    const mg_frag_bindings* outputs;
+    GLenum stage;
+    mg_glsl_metadata& metadata;
+    std::set<std::string> seen;
+    // glslang已求出合法uniform常量。按其类型树展平array/struct，绝不从源码猜表达式。
+    void initialValue(const glslang::TType& type, const std::string& name,
+                      const glslang::TConstUnionArray& constants, size_t& offset) {
+        using namespace glslang;
+        if (type.isArray()) {
+            const int count = type.getOuterArraySize();
+            if (count <= 0) throw std::runtime_error("Unsized uniform initializer array");
+            const TType element(type, 0);
+            for (int i = 0; i < count; ++i) initialValue(element, name + "[" + std::to_string(i) + "]", constants, offset);
+            return;
+        }
+        if (type.isStruct()) {
+            for (const auto& field : *type.getStruct())
+                initialValue(*field.type, name + "." + field.type->getFieldName().c_str(), constants, offset);
+            return;
+        }
+        mg_glsl_metadata::initializer value;
+        value.name = name;
+        const auto basic = type.getBasicType();
+        value.kind = basic == EbtFloat ? 'f' : basic == EbtInt || basic == EbtBool ? 'i' : basic == EbtUint ? 'u' : 0;
+        if (!value.kind) throw std::runtime_error("Uniform initializer type is not supported by the GLES target");
+        value.columns = type.isMatrix() ? type.getMatrixCols() : 1;
+        value.rows = type.isMatrix() ? type.getMatrixRows() : type.getVectorSize();
+        const size_t count = value.columns * value.rows;
+        if (count < 1 || count > 16 || offset + count > constants.size())
+            throw std::runtime_error("Uniform initializer constant shape mismatch");
+        for (size_t i = 0; i < count; ++i) {
+            const auto& component = constants[offset++];
+            std::uint32_t bits = 0;
+            if (basic == EbtFloat) {
+                static_assert(sizeof(float) == sizeof(bits) && std::numeric_limits<float>::is_iec559);
+                const float number = static_cast<float>(component.getDConst());
+                std::memcpy(&bits, &number, sizeof(bits));
+            } else if (basic == EbtInt) bits = static_cast<std::uint32_t>(component.getIConst());
+            else if (basic == EbtBool) bits = component.getBConst() ? 1 : 0;
+            else bits = component.getUConst();
+            value.bits.push_back(bits);
+        }
+        metadata.initializers.push_back(std::move(value));
+    }
+public:
+    SourceBindings(const mg_frag_bindings* o, GLenum s, mg_glsl_metadata& m)
+        : glslang::TIntermTraverser(true, false, false, false, true), outputs(o), stage(s), metadata(m) {}
+    void visitSymbol(glslang::TIntermSymbol* symbol) override {
+        using namespace glslang;
+        auto& q = symbol->getQualifier();
+        const auto& type = symbol->getType();
+        const std::string name = symbol->getName().c_str();
+        // 当前glslang把uniform初值折叠到symbol，而不是保留为运行时赋值节点。
+        if (q.storage == EvqUniform && seen.insert("initializer:" + name).second) {
+            if (symbol->getConstSubtree()) throw std::runtime_error("Uniform specialization initializer cannot be preserved");
+            if (!symbol->getConstArray().empty()) {
+                size_t offset = 0;
+                initialValue(type, name, symbol->getConstArray(), offset);
+                if (offset != symbol->getConstArray().size()) throw std::runtime_error("Unused uniform initializer constants");
+            }
+        }
+        if (stage == GL_FRAGMENT_SHADER && outputs && q.storage == EvqVaryingOut && !q.hasLocation()) {
+            const auto binding = outputs->find(name);
+            if (binding != outputs->end()) q.layoutLocation = binding->second;
+        }
+        // This walk happens on the parsed tree before link/automatic binding
+        // allocation. Macro-expanded source qualifiers retain their priority.
+        if (!q.hasBinding()) return;
+        mg_glsl_binding binding;
+        binding.binding = q.layoutBinding;
+        binding.count = type.isArray() ? std::max(1, type.getOuterArraySize()) : 1;
+        binding.name = name;
+        if (type.getBasicType() == EbtBlock) {
+            binding.kind = q.storage == EvqBuffer ? "ssbo" : "ubo";
+            binding.name = type.getTypeName().c_str();
+        } else if (type.getBasicType() == EbtSampler) {
+            binding.kind = type.getSampler().isImage() ? "image" : "sampler";
+        } else return;
+        if (seen.insert(binding.kind + ":" + binding.name).second) metadata.bindings.push_back(binding);
+    }
+};
+}
+
+std::vector<unsigned int> glsl_to_spirv(GLenum shader_type, int glsl_version, const char* const* shader_src,
+                                        int& errc, const mg_frag_bindings* outputs, mg_glsl_metadata& metadata) {
+    EShLanguage shader_language;
+    switch (shader_type) {
+    case GL_VERTEX_SHADER:
+        shader_language = EShLanguage::EShLangVertex;
+        break;
+    case GL_FRAGMENT_SHADER:
+        shader_language = EShLanguage::EShLangFragment;
+        break;
+    case GL_COMPUTE_SHADER:
+        shader_language = EShLanguage::EShLangCompute;
+        break;
+    case GL_TESS_CONTROL_SHADER:
+        shader_language = EShLanguage::EShLangTessControl;
+        break;
+    case GL_TESS_EVALUATION_SHADER:
+        shader_language = EShLanguage::EShLangTessEvaluation;
+        break;
+    case GL_GEOMETRY_SHADER:
+        shader_language = EShLanguage::EShLangGeometry;
+        break;
+    default:
+        LOG_D("GLSL type not supported!")
+        errc = -1;
+        return {};
+    }
+
+    glslang::TShader shader(shader_language);
+    shader.setStrings(shader_src, 1);
+
+    using namespace glslang;
+    shader.setEnvInput(EShSourceGlsl, shader_language, EShClientVulkan, glsl_version);
+    shader.setEnvClient(EShClientOpenGL, EShTargetOpenGL_450);
+    shader.setEnvTarget(EShTargetSpv, EShTargetSpv_1_5);
+    shader.setAutoMapLocations(true);
+    shader.setPreamble("#undef VULKAN\n");
+    shader.setAutoMapBindings(true);
+
+    TBuiltInResource TBuiltInResource_resources = InitResources();
+
+    if (!shader.parse(&TBuiltInResource_resources, glsl_version, true, EShMsgDefault)) {
+        translation_error = std::string("glslang parse: ") + shader.getInfoLog();
+        LOG_W_FORCE("%s", translation_error.c_str())
+        errc = -1;
+        return {};
+    }
+    LOG_D("GLSL Compiled.")
+    SourceBindings bindings(outputs, shader_type, metadata);
+    shader.getIntermediate()->getTreeRoot()->traverse(&bindings);
+
+    glslang::TProgram program;
+    program.addShader(&shader);
+
+    if (!program.link(EShMsgDefault)) {
+        translation_error = std::string("glslang link: ") + program.getInfoLog();
+        LOG_W_FORCE("%s", translation_error.c_str())
+        errc = -1;
+        return {};
+    }
+    LOG_D("Shader Linked.")
+    std::vector<unsigned int> spirv_code;
+    glslang::SpvOptions spvOptions;
+    spvOptions.disableOptimizer = false;
+    glslang::GlslangToSpv(*program.getIntermediate(shader_language), spirv_code, &spvOptions);
+    errc = 0;
+    return spirv_code;
+}
+
+// The context owns the ParsedIR, the compiler and every string they hand back, and the only
+// destroy used to sit past the early return. A shader the ES backend rejects is a normal
+// outcome and failed translations are not cached, so that leaked the lot again on every
+// resource-pack reload. Scoped so no exit can skip it.
+namespace {
+struct spvc_context_guard_t {
+    spvc_context context = nullptr;
+    spvc_context_guard_t() = default;
+    ~spvc_context_guard_t() {
+        if (context) spvc_context_destroy(context);
+    }
+    spvc_context_guard_t(const spvc_context_guard_t&) = delete;
+    spvc_context_guard_t& operator=(const spvc_context_guard_t&) = delete;
+};
+} // namespace
+
+// SPIRV-Cross throws internally and turns that into a result code at its C boundary; on failure
+// it leaves the out-parameter untouched. Dropping the code therefore hands the next call a
+// handle that was never written, which crashes rather than reporting anything.
+static bool spvc_ok(spvc_context context, spvc_result res, const char* what) {
+    if (res == SPVC_SUCCESS) {
+        return true;
+    }
+    translation_error = std::string("SPIRV-Cross ") + what + ": " + spvc_context_get_last_error_string(context);
+    LOG_W_FORCE("%s", translation_error.c_str())
+    return false;
+}
+
+std::string spirv_to_essl(std::vector<unsigned int> spirv, uint essl_version, int& errc) {
+    spvc_parsed_ir ir = nullptr;
+    spvc_compiler compiler_glsl = nullptr;
+    spvc_compiler_options options = nullptr;
+    const char* result = nullptr;
+
+    const SpvId* p_spirv = spirv.data();
+    size_t word_count = spirv.size();
+
+    LOG_D("spirv_code.size(): %zu", spirv.size())
+
+    // Declared before 'essl': the compiled source lives in context-owned memory and is only
+    // copied out when the std::string is constructed, so the guard has to outlive it.
+    spvc_context_guard_t guard;
+    if (spvc_context_create(&guard.context) != SPVC_SUCCESS || !guard.context) {
+        LOG_E("Error: could not create a spirv-cross context.")
+        errc = -1;
+        return "";
+    }
+    spvc_context context = guard.context;
+
+    if (!spvc_ok(context, spvc_context_parse_spirv(context, p_spirv, word_count, &ir), "spvc_context_parse_spirv") ||
+        !ir) {
+        errc = -1;
+        return "";
+    }
+    if (!spvc_ok(context,
+                 spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir, SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
+                                              &compiler_glsl),
+                 "spvc_context_create_compiler") ||
+        !compiler_glsl) {
+        errc = -1;
+        return "";
+    }
+    if (!spvc_ok(context, spvc_compiler_create_compiler_options(compiler_glsl, &options),
+                 "spvc_compiler_create_compiler_options") ||
+        !options) {
+        errc = -1;
+        return "";
+    }
+    // A silently dropped GLSL_ES option would emit desktop GLSL and hand it straight to the
+    // driver, so these are checked too.
+    if (!spvc_ok(context,
+                 spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
+                                                essl_version >= 300 ? essl_version : 300),
+                 "spvc_compiler_options_set_uint") ||
+        !spvc_ok(context, spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE),
+                 "spvc_compiler_options_set_bool") ||
+        !spvc_ok(context, spvc_compiler_install_compiler_options(compiler_glsl, options),
+                 "spvc_compiler_install_compiler_options")) {
+        errc = -1;
+        return "";
+    }
+    if (!spvc_ok(context, spvc_compiler_compile(compiler_glsl, &result), "spvc_compiler_compile") || !result) {
+        errc = -1;
+        return "";
+    }
+
+    std::string essl = result;
+
+    errc = 0;
+    return essl;
+}
+
+std::string GLSLtoGLSLES_2(const char* glsl_code, GLenum glsl_type, uint essl_version, int& return_code,
+                         const mg_frag_bindings* outputs) {
+    ensure_glslang();
+    mg_glsl_metadata metadata;
+    if (hardware->emulate_texture_buffer) {
+        // Tokenize declarations, ignoring comments and preprocessor lines.
+        std::string_view input(glsl_code);
+        size_t p = 0;
+        bool buffer_type = false;
+        while (p < input.size()) {
+            if (!mg::glsl::detail::skipTrivia(input, p).ok || p == input.size()) break;
+            if (input[p] == '#') { while (p < input.size() && input[p] != '\n') ++p; continue; }
+            if (!mg::glsl::detail::isIdentifierStart(input[p])) { ++p; buffer_type = false; continue; }
+            const size_t start = p++;
+            while (p < input.size() && mg::glsl::detail::isIdentifierChar(input[p])) ++p;
+            const std::string token(input.substr(start, p - start));
+            if (buffer_type) metadata.buffer_samplers.push_back(token);
+            buffer_type = token == "isamplerBuffer";
+        }
+    }
+    std::string correct_glsl_str = preprocess_glsl(glsl_code, glsl_type);
+    LOG_D("Firstly converted GLSL:\n%s", correct_glsl_str.c_str())
+    int glsl_version = get_or_add_glsl_version(correct_glsl_str);
+    // SPIR-V generation requires ES 3.10 input. An ES 3.00 shader normally
+    // bypasses translation, but a program-specific output binding needs the
+    // parsed AST. Promote only that compiler input; Cross still emits the
+    // actual target ESSL version requested by the backend.
+    if (glsl_version == 300) {
+        const std::regex es300(R"((^|\n)\s*#\s*version\s+300\s+es\b)");
+        if (std::regex_search(correct_glsl_str, es300)) {
+            correct_glsl_str = std::regex_replace(correct_glsl_str, es300, "$1#version 310 es");
+            glsl_version = 310;
+        }
+    }
+
+    const char* s[] = {correct_glsl_str.c_str()};
+    int errc = 0;
+    std::vector<unsigned int> spirv_code = glsl_to_spirv(glsl_type, glsl_version, s, errc, outputs, metadata);
+    if (errc != 0) {
+        return_code = -1;
+        return "";
+    }
+    errc = 0;
+    std::string essl = spirv_to_essl(spirv_code, essl_version, errc);
+    if (errc != 0) {
+        return_code = -2;
+        return "";
+    }
+
+    // Post-processing ESSL
+
+    // SPIRV-Cross already gates layout(binding) by the target ESSL version.
+    // Removing it here destroyed sampler/UBO/SSBO defaults on graphics stages.
+    essl = processOutColorLocations(essl);
+    // Must run before forceSupporterOutput(): that pass inserts precision
+    // statements relative to the shader header, and the rewrite below adds
+    // output declarations those statements have to cover.
+    {
+        int flattened_outputs = 0;
+        essl = flattenDynamicFragmentOutputArrays(essl, glsl_type, flattened_outputs);
+        if (flattened_outputs > 0) {
+            LOG_I("[Shader] Flattened %d dynamically indexed fragment output array declaration(s) for ESSL",
+                  flattened_outputs)
+        }
+    }
+    essl = forceSupporterOutput(essl);
+    for (const auto& binding : metadata.bindings)
+        essl += "\n//MG_BIND " + binding.kind + " " + std::to_string(binding.binding) + " " +
+                std::to_string(binding.count) + " " + binding.name;
+    for (const auto& name : metadata.buffer_samplers) essl += "\n//MG_BUFFER " + name;
+    // 与ESSL一起缓存；计数/终止证据包括零项，整块/单行丢失和重复都必须拒绝。
+    essl += "\n//MG_INIT_BEGIN " + std::to_string(metadata.initializers.size());
+    for (const auto& value : metadata.initializers) {
+        essl += "\n//MG_INIT " + std::string(1, value.kind) + " " + std::to_string(value.columns) + " " +
+                std::to_string(value.rows) + " " + value.name + " " + std::to_string(value.bits.size());
+        for (const auto bits : value.bits) essl += " " + std::to_string(bits);
+    }
+    essl += "\n//MG_INIT_END " + std::to_string(metadata.initializers.size());
+    essl += "\n";
+
+    LOG_D("Originally GLSL to GLSL ES Complete: \n%s", essl.c_str())
+    return_code = errc;
+    return essl;
+}
+
+std::string GLSLtoGLSLES_1(const char* glsl_code, GLenum glsl_type, uint esversion, int& return_code) { // useless now
+    /*
+#if !defined(__APPLE__)
+    LOG_W("Warning: use glsl optimizer to convert shader.")
+    if (esversion < 300) esversion = 300;
+    std::string result = MesaConvertShader(glsl_code, glsl_type == GL_VERTEX_SHADER ? GL_VERTEX_SHADER :
+GL_FRAGMENT_SHADER, 460LL, esversion);
+
+    return_code = 0;
+    return result;
+#else
+    LOG_W_FORCE("Cannot convert glsl with version %d in MacOS/iOS", esversion);
+    return std::string(glsl_code);
+#endif
+    */
+}

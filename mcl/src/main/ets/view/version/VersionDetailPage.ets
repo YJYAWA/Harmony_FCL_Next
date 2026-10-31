@@ -4,7 +4,7 @@
  *
  * 功能: 查看版本信息、管理模组加载器、编辑版本配置
  */
-import { GameVersion, LaunchConfig, ModLoaderType } from '../../core/game/GameTypes';
+import { LaunchConfig, ModLoaderType } from '../../core/game/GameTypes';
 import { VersionManager } from '../../core/game/VersionManager';
 import { BMCLAPIDownloadProvider } from '../../core/download/DownloadProvider';
 import { FabricInstaller, ForgeInstaller } from '../../core/game/ModLoaderInstaller';
@@ -14,12 +14,23 @@ import { GameLauncherService } from '../../service/GameLauncherService';
 import { SettingsManager } from '../../core/SettingsManager';
 import { promptAction } from '@kit.ArkUI';
 
+/** 版本详情展示信息 (替代未类型化对象字面量) */
+class VersionDetailInfo {
+  id: string = '';
+  type: string = '';
+  mainClass: string = '';
+  javaVersion: number = 8;
+  releaseTime: string = '';
+  assetIndex: string = 'N/A';
+  libraryCount: number = 0;
+}
+
 @ComponentV2
 export struct VersionDetailPage {
   @Param versionId: string = '';
   @Event onClose?: () => void;
 
-  @Local versionInfo: Record<string, Object> | null = null;
+  @Local versionInfo: VersionDetailInfo | null = null;
   @Local isLoading: boolean = true;
   @Local showLaunchDialog: boolean = false;
   @Local modCount: number = 0;
@@ -41,15 +52,15 @@ export struct VersionDetailPage {
     try {
       const detail = await this.versionManager.getVersionDetail(this.versionId);
       if (detail) {
-        this.versionInfo = {
-          id: detail.id,
-          type: detail.type,
-          mainClass: detail.mainClass,
-          javaVersion: detail.javaVersion?.majorVersion ?? 8,
-          releaseTime: detail.releaseTime,
-          assetIndex: detail.assetIndex?.id ?? 'N/A',
-          libraryCount: detail.libraries?.length ?? 0
-        } as Record<string, Object>;
+        const info = new VersionDetailInfo();
+        info.id = detail.id;
+        info.type = detail.type;
+        info.mainClass = detail.mainClass;
+        info.javaVersion = detail.javaVersion?.majorVersion ?? 8;
+        info.releaseTime = detail.releaseTime;
+        info.assetIndex = detail.assetIndex?.id ?? 'N/A';
+        info.libraryCount = detail.libraries?.length ?? 0;
+        this.versionInfo = info;
       }
     } finally {
       this.isLoading = false;
@@ -102,10 +113,10 @@ export struct VersionDetailPage {
           .fontSize(28).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
 
         if (this.versionInfo) {
-          Text(`Type: ${this.versionInfo['type']} · Java ${this.versionInfo['javaVersion']}`)
+          Text(`Type: ${this.versionInfo.type} · Java ${this.versionInfo.javaVersion}`)
             .fontSize(14).fontColor('#999999').margin({ top: 4 })
 
-          Text(`Main: ${this.versionInfo['mainClass'] ?? 'net.minecraft.client.main.Main'}`)
+          Text(`Main: ${this.versionInfo.mainClass}`)
             .fontSize(12).fontColor('#666666').margin({ top: 2 })
         }
       }
@@ -145,11 +156,11 @@ export struct VersionDetailPage {
       if (this.isLoading) {
         LoadingProgress().width(24).height(24).color('#E94560')
       } else if (this.versionInfo) {
-        this.buildInfoRow('Release', this.versionInfo['releaseTime'] as string ?? 'Unknown');
-        this.buildInfoRow('Main Class', this.versionInfo['mainClass'] as string ?? 'N/A');
-        this.buildInfoRow('Java Version', `Java ${this.versionInfo['javaVersion']}`);
-        this.buildInfoRow('Asset Index', this.versionInfo['assetIndex'] as string ?? 'N/A');
-        this.buildInfoRow('Libraries', `${this.versionInfo['libraryCount'] ?? 0}`);
+        this.buildInfoRow('Release', this.versionInfo.releaseTime || 'Unknown');
+        this.buildInfoRow('Main Class', this.versionInfo.mainClass || 'N/A');
+        this.buildInfoRow('Java Version', `Java ${this.versionInfo.javaVersion}`);
+        this.buildInfoRow('Asset Index', this.versionInfo.assetIndex);
+        this.buildInfoRow('Libraries', `${this.versionInfo.libraryCount}`);
       }
     }
     .width('100%').padding(12).backgroundColor('#16213E').borderRadius(10)
@@ -214,10 +225,10 @@ export struct VersionDetailPage {
         .fontSize(18).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
         .width('100%').margin({ bottom: 8 })
 
-      this.buildConfigRow('Memory', `${this.settings.get('minMemory')}MB - ${this.settings.get('maxMemory')}MB`)
-      this.buildConfigRow('Java Path', this.settings.get('javaPath') || 'Auto-detect')
-      this.buildConfigRow('Game Dir', this.settings.get('gameDir') || FileUtils.getMinecraftDir())
-      this.buildConfigRow('Window', `${this.settings.get('windowWidth')}×${this.settings.get('windowHeight')}`)
+      this.buildConfigRow('Memory', `${this.settings.settings.minMemory}MB - ${this.settings.settings.maxMemory}MB`)
+      this.buildConfigRow('Java Path', this.settings.settings.javaPath || 'Auto-detect')
+      this.buildConfigRow('Game Dir', this.settings.settings.gameDir || FileUtils.getMinecraftDir())
+      this.buildConfigRow('Window', `${this.settings.settings.windowWidth}×${this.settings.settings.windowHeight}`)
 
       Button('Edit in Settings')
         .fontSize(13).fontColor('#E94560').backgroundColor('transparent')
@@ -270,13 +281,13 @@ export struct VersionDetailPage {
     const config: LaunchConfig = {
       version: this.versionId,
       gameDir,
-      javaPath: this.settings.get('javaPath') || 'java',
-      minMemory: this.settings.get('minMemory'),
-      maxMemory: this.settings.get('maxMemory'),
-      extraJVMArgs: this.settings.get('extraJVMArgs').split(' ').filter(a => a),
-      windowWidth: this.settings.get('windowWidth'),
-      windowHeight: this.settings.get('windowHeight'),
-      fullscreen: this.settings.get('fullscreen'),
+      javaPath: this.settings.settings.javaPath || 'java',
+      minMemory: this.settings.settings.minMemory,
+      maxMemory: this.settings.settings.maxMemory,
+      extraJVMArgs: this.settings.settings.extraJVMArgs.split(' ').filter((a: string): boolean => a.length > 0),
+      windowWidth: this.settings.settings.windowWidth,
+      windowHeight: this.settings.settings.windowHeight,
+      fullscreen: this.settings.settings.fullscreen,
       authUsername: 'Player',
       authUUID: '00000000-0000-0000-0000-000000000000',
       authAccessToken: 'offline',

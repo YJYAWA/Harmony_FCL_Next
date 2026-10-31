@@ -6,7 +6,6 @@
 import { FileUtils } from '../../core/util/FileUtils';
 import { AppContext } from '../../common/AppContext';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { systemDateTime } from '@kit.BasicServicesKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 
 const TAG = 'FCL-CrashReporter';

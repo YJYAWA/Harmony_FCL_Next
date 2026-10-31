@@ -16,8 +16,8 @@
  * - PC: 纯键鼠模式
  */
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import native from 'libfcl_native.so';
 
 const TAG = 'FCL-TouchController';
 
@@ -32,7 +32,7 @@ export enum ControlType {
 /** 按钮配置 */
 export interface ButtonConfig {
   id: string;
-  type: ControlType.BUTTON;
+  type: ControlType;
   /** 键码 (对应 Minecraft 按键) */
   keyCode: number;
   /** 显示文本 */
@@ -56,7 +56,7 @@ export interface ButtonConfig {
 /** 方向键配置 */
 export interface DirectionConfig {
   id: string;
-  type: ControlType.DIRECTION;
+  type: ControlType;
   /** 位置 */
   x: number;
   y: number;
@@ -77,7 +77,7 @@ export interface DirectionConfig {
 /** 触摸板配置 */
 export interface TouchpadConfig {
   id: string;
-  type: ControlType.TOUCHPAD;
+  type: ControlType;
   /** 位置 */
   x: number;
   y: number;
@@ -162,6 +162,10 @@ export struct TouchController {
   keyEventCallback?: (keyCode: number, pressed: boolean) => void;
   mouseMoveCallback?: (dx: number, dy: number) => void;
   directionCallback?: (direction: Direction) => void;
+
+  /** 触摸板上一帧手指位置（增量计算用，无需 UI 观察） */
+  private lastTouchX: number = 0;
+  private lastTouchY: number = 0;
 
   aboutToAppear(): void {
     this.deviceType = deviceInfo.deviceType;
@@ -283,7 +287,8 @@ export struct TouchController {
         .width(dir.size)
         .height(dir.size)
         .fill('rgba(255,255,255,0.1)')
-        .stroke({ width: 2, color: `${dir.color}${Math.floor(dir.opacity * 255).toString(16).padStart(2, '0')}` })
+        .stroke(`${dir.color}${Math.floor(dir.opacity * 255).toString(16).padStart(2, '0')}`)
+        .strokeWidth(2)
 
       // 内圈 (跟随手指)
       Circle()
@@ -346,13 +351,27 @@ export struct TouchController {
       .border({ width: 1, color: 'rgba(255,255,255,0.1)', style: BorderStyle.Dashed })
       .borderRadius(12)
       .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Move && event.touches.length > 0) {
-          const dx = event.touches[0].x - (event.touches[0].x - 0); // 简化实现
-          const dy = event.touches[0].y - (event.touches[0].y - 0);
-          // 基于上一帧位置计算增量
-          if (this.mouseMoveCallback) {
-            // 乘以灵敏度
-            this.mouseMoveCallback(0, 0); // 实际应基于手指移动delta
+        if (event.touches.length > 0) {
+          const x = event.touches[0].x;
+          const y = event.touches[0].y;
+          if (event.type === TouchType.Down) {
+            // 按下：记录起点，不做增量
+            this.lastTouchX = x;
+            this.lastTouchY = y;
+          } else if (event.type === TouchType.Move) {
+            // 基于上一帧位置计算增量，乘以灵敏度
+            const dx = (x - this.lastTouchX) * pad.sensitivity;
+            const dy = (y - this.lastTouchY) * pad.sensitivity;
+            this.lastTouchX = x;
+            this.lastTouchY = y;
+            if (this.mouseMoveCallback) {
+              this.mouseMoveCallback(dx, dy);
+            }
+            // NAPI：相对视角增量送入 native ring buffer
+            native.sendCursorPos(dx, dy);
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.lastTouchX = 0;
+            this.lastTouchY = 0;
           }
         }
         event.stopPropagation();
@@ -414,7 +433,9 @@ export struct TouchController {
     if (this.keyEventCallback) {
       this.keyEventCallback(keyCode, pressed);
     }
-    // NAPI 调用: native.sendKeyEvent(keyCode, pressed ? 1 : 0);
+    // NAPI 调用：事件进入 native ring buffer（Phase 2 的 GLFW 兼容层在
+    // glfwPollEvents 时消费；GLFW 键码与 TouchController 的 keyCode 体系一致）
+    native.sendKeyEvent(keyCode, pressed ? 1 : 0);
     hilog.debug(0x0000, TAG, `Key event: code=${keyCode}, pressed=${pressed}`);
   }
 

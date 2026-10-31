@@ -12,6 +12,13 @@ export interface OfflineAccountConfig {
   uuid?: string;
 }
 
+/** 离线账号存储格式 */
+export interface OfflineAccountStorage {
+  type: AccountType;
+  username: string;
+  uuid: string;
+}
+
 /**
  * 离线账号 - 不需要网络验证的本地账号
  */
@@ -52,7 +59,7 @@ export class OfflineAccount implements Account {
     return this.logIn();
   }
 
-  toStorage(): Record<string, Object> {
+  toStorage(): OfflineAccountStorage {
     return {
       type: AccountType.OFFLINE,
       username: this._username,

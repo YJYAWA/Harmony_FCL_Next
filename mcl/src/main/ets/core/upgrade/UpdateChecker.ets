@@ -4,7 +4,6 @@
  */
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction } from '@kit.ArkUI';
 
 const TAG = 'FCL-UpdateChecker';
 

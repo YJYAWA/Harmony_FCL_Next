@@ -3,8 +3,8 @@
  * 移植自: FCLCore + FCL/setting
  * 使用 HarmonyOS Preferences 替代 Android SharedPreferences
  */
-import { Preferences } from '@kit.ArkData';
-import { AppContext } from '../../common/AppContext';
+import { preferences as dataPreferences } from '@kit.ArkData';
+import { AppContext } from '../common/AppContext';
 
 /** 主题设置 */
 export enum Theme {
@@ -119,7 +119,7 @@ const DEFAULT_SETTINGS: LauncherSettings = {
  */
 export class SettingsManager {
   private static instance: SettingsManager | null = null;
-  private preferences: Preferences | null = null;
+  private preferences: dataPreferences.Preferences | null = null;
   private _settings: LauncherSettings = SettingsManager.cloneSettings(DEFAULT_SETTINGS);
   private listeners: Array<(settings: LauncherSettings) => void> = [];
 
@@ -140,12 +140,59 @@ export class SettingsManager {
   static mergeSettings(base: LauncherSettings, overrides: Partial<LauncherSettings>): LauncherSettings {
     const c = SettingsManager.cloneSettings(base);
     const o = overrides as Record<string, Object>;
-    const keys: string[] = ['theme','backgroundColor','backgroundImagePath','downloadSource','downloadConcurrency','downloadThreads','language','maxMemory','minMemory','javaPath','gameDir','extraJVMArgs','windowWidth','windowHeight','fullscreen','autoCloseLauncher','showLogs','debugMode'];
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      if (o[k] !== undefined) {
-        (c as Record<string, Object>)[k] = o[k];
-      }
+    if (o['theme'] !== undefined) {
+      c.theme = o['theme'] as Theme;
+    }
+    if (o['backgroundColor'] !== undefined) {
+      c.backgroundColor = o['backgroundColor'] as string;
+    }
+    if (o['backgroundImagePath'] !== undefined) {
+      c.backgroundImagePath = o['backgroundImagePath'] as string;
+    }
+    if (o['downloadSource'] !== undefined) {
+      c.downloadSource = o['downloadSource'] as DownloadSource;
+    }
+    if (o['downloadConcurrency'] !== undefined) {
+      c.downloadConcurrency = o['downloadConcurrency'] as number;
+    }
+    if (o['downloadThreads'] !== undefined) {
+      c.downloadThreads = o['downloadThreads'] as number;
+    }
+    if (o['language'] !== undefined) {
+      c.language = o['language'] as Language;
+    }
+    if (o['maxMemory'] !== undefined) {
+      c.maxMemory = o['maxMemory'] as number;
+    }
+    if (o['minMemory'] !== undefined) {
+      c.minMemory = o['minMemory'] as number;
+    }
+    if (o['javaPath'] !== undefined) {
+      c.javaPath = o['javaPath'] as string;
+    }
+    if (o['gameDir'] !== undefined) {
+      c.gameDir = o['gameDir'] as string;
+    }
+    if (o['extraJVMArgs'] !== undefined) {
+      c.extraJVMArgs = o['extraJVMArgs'] as string;
+    }
+    if (o['windowWidth'] !== undefined) {
+      c.windowWidth = o['windowWidth'] as number;
+    }
+    if (o['windowHeight'] !== undefined) {
+      c.windowHeight = o['windowHeight'] as number;
+    }
+    if (o['fullscreen'] !== undefined) {
+      c.fullscreen = o['fullscreen'] as boolean;
+    }
+    if (o['autoCloseLauncher'] !== undefined) {
+      c.autoCloseLauncher = o['autoCloseLauncher'] as boolean;
+    }
+    if (o['showLogs'] !== undefined) {
+      c.showLogs = o['showLogs'] as boolean;
+    }
+    if (o['debugMode'] !== undefined) {
+      c.debugMode = o['debugMode'] as boolean;
     }
     return c;
   }
@@ -163,15 +210,16 @@ export class SettingsManager {
 
   /** 初始化并加载设置 */
   async initialize(): Promise<void> {
-    this.preferences = await Preferences.getPreferences(
+    const prefs = await dataPreferences.getPreferences(
       AppContext.context, 'fcl_settings'
     );
+    this.preferences = prefs;
 
     // 从存储中读取
-    const stored = await this.preferences.get('launcher_settings', '');
-    if (stored && typeof stored === 'string' && stored.length > 0) {
+    const stored: dataPreferences.ValueType = await prefs.get('launcher_settings', '');
+    if (stored && typeof stored === 'string' && (stored as string).length > 0) {
       try {
-        const parsed = JSON.parse(stored) as Partial<LauncherSettings>;
+        const parsed = JSON.parse(stored as string) as Partial<LauncherSettings>;
         this._settings = SettingsManager.mergeSettings(DEFAULT_SETTINGS, parsed);
       } catch {
         this._settings = SettingsManager.cloneSettings(DEFAULT_SETTINGS);
@@ -203,14 +251,73 @@ export class SettingsManager {
     this.notifyListeners();
   }
 
-  /** 获取单个设置项 */
-  get<K extends keyof LauncherSettings>(key: K): LauncherSettings[K] {
-    return this._settings[key];
+  /** 设置单个设置项 (ArkTS 不支持泛型索引访问，key 用字符串，value 用 Object) */
+  async set(key: string, value: Object): Promise<void> {
+    await this.updateSettings(SettingsManager.buildPatch(key, value));
   }
 
-  /** 设置单个设置项 */
-  async set<K extends keyof LauncherSettings>(key: K, value: LauncherSettings[K]): Promise<void> {
-    await this.updateSettings({ [key]: value } as Partial<LauncherSettings>);
+  /** 按显式 switch 构造单项设置补丁 (替代计算属性名对象字面量) */
+  private static buildPatch(key: string, value: Object): Partial<LauncherSettings> {
+    const patch: Partial<LauncherSettings> = {};
+    switch (key) {
+      case 'theme':
+        patch.theme = value as Theme;
+        break;
+      case 'backgroundColor':
+        patch.backgroundColor = value as string;
+        break;
+      case 'backgroundImagePath':
+        patch.backgroundImagePath = value as string;
+        break;
+      case 'downloadSource':
+        patch.downloadSource = value as DownloadSource;
+        break;
+      case 'downloadConcurrency':
+        patch.downloadConcurrency = value as number;
+        break;
+      case 'downloadThreads':
+        patch.downloadThreads = value as number;
+        break;
+      case 'language':
+        patch.language = value as Language;
+        break;
+      case 'maxMemory':
+        patch.maxMemory = value as number;
+        break;
+      case 'minMemory':
+        patch.minMemory = value as number;
+        break;
+      case 'javaPath':
+        patch.javaPath = value as string;
+        break;
+      case 'gameDir':
+        patch.gameDir = value as string;
+        break;
+      case 'extraJVMArgs':
+        patch.extraJVMArgs = value as string;
+        break;
+      case 'windowWidth':
+        patch.windowWidth = value as number;
+        break;
+      case 'windowHeight':
+        patch.windowHeight = value as number;
+        break;
+      case 'fullscreen':
+        patch.fullscreen = value as boolean;
+        break;
+      case 'autoCloseLauncher':
+        patch.autoCloseLauncher = value as boolean;
+        break;
+      case 'showLogs':
+        patch.showLogs = value as boolean;
+        break;
+      case 'debugMode':
+        patch.debugMode = value as boolean;
+        break;
+      default:
+        break;
+    }
+    return patch;
   }
 
   /** 注册设置变更监听 */

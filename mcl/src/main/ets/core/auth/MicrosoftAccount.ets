@@ -55,20 +55,26 @@ interface TokenResponse {
   error_description?: string;
 }
 
+/** Xbox Live 用户哈希声明 */
+export interface XuiClaim {
+  uhs: string;
+}
+
+/** Xbox Live DisplayClaims */
+export interface XBLDisplayClaims {
+  xui: XuiClaim[];
+}
+
 /** Xbox Live 认证响应 */
 interface XBLResponse {
   Token: string;
-  DisplayClaims: {
-    xui: Array<{ uhs: string }>;
-  };
+  DisplayClaims: XBLDisplayClaims;
 }
 
 /** XSTS 认证响应 */
 interface XSTSResponse {
   Token: string;
-  DisplayClaims: {
-    xui: Array<{ uhs: string }>;
-  };
+  DisplayClaims: XBLDisplayClaims;
 }
 
 /** Minecraft 认证响应 */
@@ -78,17 +84,23 @@ interface MinecraftAuthResponse {
   expires_in: number;
 }
 
+/** Minecraft 角色皮肤信息 */
+export interface ProfileSkin {
+  url: string;
+  variant: string;
+}
+
+/** Minecraft 角色披风信息 */
+export interface ProfileCape {
+  url: string;
+}
+
 /** Minecraft 角色信息 */
 interface MinecraftProfileResponse {
   id: string;
   name: string;
-  skins?: Array<{
-    url: string;
-    variant: string;
-  }>;
-  capes?: Array<{
-    url: string;
-  }>;
+  skins?: ProfileSkin[];
+  capes?: ProfileCape[];
 }
 
 /** 存储格式 */
@@ -100,6 +112,59 @@ interface MicrosoftAccountStorage {
   msAccessToken: string;
   msRefreshToken: string;
   lastLoginTime: number;
+}
+
+/** Token 刷新请求体 */
+interface RefreshTokenRequest {
+  client_id: string;
+  refresh_token: string;
+  grant_type: string;
+  scope: string;
+}
+
+/** 设备码请求体 */
+interface DeviceCodeRequest {
+  client_id: string;
+  scope: string;
+}
+
+/** 设备码轮询请求体 */
+interface DeviceCodePollRequest {
+  grant_type: string;
+  code: string;
+  client_id: string;
+}
+
+/** Xbox Live 认证请求属性 */
+interface XBLRequestProperties {
+  AuthMethod: string;
+  SiteName: string;
+  RpsTicket: string;
+}
+
+/** Xbox Live 认证请求体 */
+interface XBLRequestBody {
+  Properties: XBLRequestProperties;
+  RelyingParty: string;
+  TokenType: string;
+}
+
+/** XSTS 认证请求属性 */
+interface XSTSRequestProperties {
+  SandboxId: string;
+  UserTokens: string[];
+}
+
+/** XSTS 认证请求体 */
+interface XSTSRequestBody {
+  Properties: XSTSRequestProperties;
+  RelyingParty: string;
+  TokenType: string;
+}
+
+/** Minecraft 认证请求体 */
+interface MinecraftLoginRequest {
+  identityToken: string;
 }
 
 /**
@@ -155,7 +220,7 @@ export class MicrosoftAccount implements Account {
           if (err instanceof CredentialExpiredException) {
             // 凭证过期, 继续走完整登录
           } else {
-            throw err;
+            throw err as Error;
           }
         }
       }
@@ -217,14 +282,15 @@ export class MicrosoftAccount implements Account {
    */
   private async refreshTokens(): Promise<AuthInfo> {
     // 刷新 Microsoft Token
+    const refreshBody: RefreshTokenRequest = {
+      client_id: this.oauthConfig.clientId,
+      refresh_token: this._refreshToken,
+      grant_type: 'refresh_token',
+      scope: this.oauthConfig.scope
+    };
     const response = await this.httpPostJSON<TokenResponse>(
       this.oauthConfig.tokenURL,
-      {
-        client_id: this.oauthConfig.clientId,
-        refresh_token: this._refreshToken,
-        grant_type: 'refresh_token',
-        scope: this.oauthConfig.scope
-      }
+      refreshBody
     );
 
     if (response.error) {
@@ -244,12 +310,13 @@ export class MicrosoftAccount implements Account {
 
   /** 请求设备码 */
   private async requestDeviceCode(): Promise<DeviceCodeResponse> {
+    const deviceBody: DeviceCodeRequest = {
+      client_id: this.oauthConfig.clientId,
+      scope: this.oauthConfig.scope
+    };
     const response = await this.httpPostJSON<DeviceCodeResponse>(
       this.oauthConfig.deviceCodeURL,
-      {
-        client_id: this.oauthConfig.clientId,
-        scope: this.oauthConfig.scope
-      }
+      deviceBody
     );
 
     if (response.error) {
@@ -270,13 +337,14 @@ export class MicrosoftAccount implements Account {
     while (Date.now() - startTime < maxWait) {
       await this.sleep(Math.max(interval, 1000));
 
+      const pollBody: DeviceCodePollRequest = {
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        code: deviceCode.device_code,
+        client_id: this.oauthConfig.clientId
+      };
       const response = await this.httpPostJSON<TokenResponse>(
         this.oauthConfig.tokenURL,
-        {
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-          code: deviceCode.device_code,
-          client_id: this.oauthConfig.clientId
-        }
+        pollBody
       );
 
       if (response.access_token) {
@@ -309,7 +377,7 @@ export class MicrosoftAccount implements Account {
    * POST https://user.auth.xboxlive.com/user/authenticate
    */
   private async authenticateXBL(accessToken: string): Promise<XBLResponse> {
-    const body = {
+    const body: XBLRequestBody = {
       Properties: {
         AuthMethod: 'RPS',
         SiteName: 'user.auth.xboxlive.com',
@@ -337,7 +405,7 @@ export class MicrosoftAccount implements Account {
    * POST https://xsts.auth.xboxlive.com/xsts/authorize
    */
   private async authenticateXSTS(xblToken: string): Promise<XSTSResponse> {
-    const body = {
+    const body: XSTSRequestBody = {
       Properties: {
         SandboxId: 'RETAIL',
         UserTokens: [xblToken]
@@ -372,7 +440,7 @@ export class MicrosoftAccount implements Account {
       throw new AuthenticationException('Missing user hash in XSTS response');
     }
 
-    const body = {
+    const body: MinecraftLoginRequest = {
       identityToken: `XBL3.0 x=${uhs};${xstsToken.Token}`
     };
 
@@ -476,9 +544,14 @@ export class MicrosoftAccount implements Account {
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...extraHeaders
+        'Accept': 'application/json'
       };
+      if (extraHeaders) {
+        const extraKeys = Object.keys(extraHeaders);
+        for (const key of extraKeys) {
+          headers[key] = extraHeaders[key];
+        }
+      }
 
       const response = await httpRequest.request(url, {
         method: http.RequestMethod.POST,
@@ -491,7 +564,7 @@ export class MicrosoftAccount implements Account {
       if (response.result) {
         return JSON.parse(response.result as string) as T;
       }
-      return {} as T;
+      return JSON.parse('{}') as T;
     } catch (err) {
       const error = err as BusinessError;
       throw new ServerDisconnectException(`HTTP request failed: ${error.message}`);

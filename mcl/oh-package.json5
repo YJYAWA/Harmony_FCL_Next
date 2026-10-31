@@ -5,6 +5,9 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {}
+  "dependencies": {
+    "libfcl_native.so": "file:./src/main/cpp/types/fcl_native",
+    "libentry.so": "file:./src/main/cpp/types/libentry"
+  }
 }
 

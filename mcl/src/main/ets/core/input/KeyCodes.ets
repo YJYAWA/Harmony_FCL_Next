@@ -7,9 +7,6 @@
  * - 常用游戏操作对应的默认按键
  * - 手柄按键映射
  */
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-const TAG = 'FCL-KeyCodes';
 
 /** AWT 键盘码常量 (java.awt.event.KeyEvent) */
 export enum AWTKeyCode {
@@ -164,31 +161,36 @@ export const MINECRAFT_DEFAULT_BINDINGS: MinecraftKeyBinding[] = [
  * 键码转换工具
  */
 export class KeyCodeConverter {
+  /** GLFW → AWT 特殊键映射 (计算属性名改为静态 Map 逐条 set) */
+  private static readonly GLFW_TO_AWT: Map<number, number> = KeyCodeConverter.buildGlfwToAWTMap();
+
+  private static buildGlfwToAWTMap(): Map<number, number> {
+    const map = new Map<number, number>();
+    map.set(GLFWKeyCode.GLFW_KEY_SPACE, AWTKeyCode.VK_SPACE);
+    map.set(GLFWKeyCode.GLFW_KEY_ESCAPE, AWTKeyCode.VK_ESCAPE);
+    map.set(GLFWKeyCode.GLFW_KEY_ENTER, AWTKeyCode.VK_ENTER);
+    map.set(GLFWKeyCode.GLFW_KEY_TAB, AWTKeyCode.VK_TAB);
+    map.set(GLFWKeyCode.GLFW_KEY_LEFT_SHIFT, AWTKeyCode.VK_SHIFT);
+    map.set(GLFWKeyCode.GLFW_KEY_LEFT_CONTROL, AWTKeyCode.VK_CONTROL);
+    map.set(GLFWKeyCode.GLFW_KEY_LEFT_ALT, AWTKeyCode.VK_ALT);
+    map.set(GLFWKeyCode.GLFW_KEY_RIGHT_SHIFT, AWTKeyCode.VK_SHIFT);
+    map.set(GLFWKeyCode.GLFW_KEY_RIGHT_CONTROL, AWTKeyCode.VK_CONTROL);
+    map.set(GLFWKeyCode.GLFW_KEY_BACKSPACE, AWTKeyCode.VK_BACK_SPACE);
+    map.set(GLFWKeyCode.GLFW_KEY_DELETE, AWTKeyCode.VK_DELETE);
+    map.set(GLFWKeyCode.GLFW_KEY_INSERT, AWTKeyCode.VK_INSERT);
+    map.set(GLFWKeyCode.GLFW_KEY_HOME, AWTKeyCode.VK_HOME);
+    map.set(GLFWKeyCode.GLFW_KEY_END, AWTKeyCode.VK_END);
+    map.set(GLFWKeyCode.GLFW_KEY_PAGE_UP, AWTKeyCode.VK_PAGE_UP);
+    map.set(GLFWKeyCode.GLFW_KEY_PAGE_DOWN, AWTKeyCode.VK_PAGE_DOWN);
+    map.set(GLFWKeyCode.GLFW_KEY_LEFT, AWTKeyCode.VK_LEFT);
+    map.set(GLFWKeyCode.GLFW_KEY_UP, AWTKeyCode.VK_UP);
+    map.set(GLFWKeyCode.GLFW_KEY_RIGHT, AWTKeyCode.VK_RIGHT);
+    map.set(GLFWKeyCode.GLFW_KEY_DOWN, AWTKeyCode.VK_DOWN);
+    return map;
+  }
+
   /** GLFW → AWT 键码映射 */
   static glfwToAWT(glfwCode: number): number {
-    const map: Record<number, number> = {
-      [GLFWKeyCode.GLFW_KEY_SPACE]: AWTKeyCode.VK_SPACE,
-      [GLFWKeyCode.GLFW_KEY_ESCAPE]: AWTKeyCode.VK_ESCAPE,
-      [GLFWKeyCode.GLFW_KEY_ENTER]: AWTKeyCode.VK_ENTER,
-      [GLFWKeyCode.GLFW_KEY_TAB]: AWTKeyCode.VK_TAB,
-      [GLFWKeyCode.GLFW_KEY_LEFT_SHIFT]: AWTKeyCode.VK_SHIFT,
-      [GLFWKeyCode.GLFW_KEY_LEFT_CONTROL]: AWTKeyCode.VK_CONTROL,
-      [GLFWKeyCode.GLFW_KEY_LEFT_ALT]: AWTKeyCode.VK_ALT,
-      [GLFWKeyCode.GLFW_KEY_RIGHT_SHIFT]: AWTKeyCode.VK_SHIFT,
-      [GLFWKeyCode.GLFW_KEY_RIGHT_CONTROL]: AWTKeyCode.VK_CONTROL,
-      [GLFWKeyCode.GLFW_KEY_BACKSPACE]: AWTKeyCode.VK_BACK_SPACE,
-      [GLFWKeyCode.GLFW_KEY_DELETE]: AWTKeyCode.VK_DELETE,
-      [GLFWKeyCode.GLFW_KEY_INSERT]: AWTKeyCode.VK_INSERT,
-      [GLFWKeyCode.GLFW_KEY_HOME]: AWTKeyCode.VK_HOME,
-      [GLFWKeyCode.GLFW_KEY_END]: AWTKeyCode.VK_END,
-      [GLFWKeyCode.GLFW_KEY_PAGE_UP]: AWTKeyCode.VK_PAGE_UP,
-      [GLFWKeyCode.GLFW_KEY_PAGE_DOWN]: AWTKeyCode.VK_PAGE_DOWN,
-      [GLFWKeyCode.GLFW_KEY_LEFT]: AWTKeyCode.VK_LEFT,
-      [GLFWKeyCode.GLFW_KEY_UP]: AWTKeyCode.VK_UP,
-      [GLFWKeyCode.GLFW_KEY_RIGHT]: AWTKeyCode.VK_RIGHT,
-      [GLFWKeyCode.GLFW_KEY_DOWN]: AWTKeyCode.VK_DOWN,
-    };
-
     // 字母键 A-Z: GLFW 65-90 = AWT 65-90
     if (glfwCode >= 65 && glfwCode <= 90) {
       return glfwCode;
@@ -206,7 +208,7 @@ export class KeyCodeConverter {
       return glfwCode - 320 + 96;
     }
 
-    return map[glfwCode] ?? glfwCode;
+    return KeyCodeConverter.GLFW_TO_AWT.get(glfwCode) ?? glfwCode;
   }
 
   /** 根据键位名称查找默认 GLFW 键码 */

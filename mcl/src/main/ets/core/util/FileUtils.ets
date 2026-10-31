@@ -4,7 +4,8 @@
  * 使用 HarmonyOS @ohos.file.fs
  */
 import { fileIo as fs, ReadOptions, WriteOptions } from '@kit.CoreFileKit';
-import { hash } from '@kit.ArkTS';
+import { util } from '@kit.ArkTS';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppContext } from '../../common/AppContext';
@@ -75,8 +76,8 @@ export class FileUtils {
       fs.readSync(file.fd, buffer);
       fs.closeSync(file);
 
-      const decoder = new TextDecoder('utf-8');
-      return decoder.decode(buffer);
+      const decoder = util.TextDecoder.create('utf-8');
+      return decoder.decodeWithStream(new Uint8Array(buffer));
     } catch (err) {
       const error = err as BusinessError;
       hilog.error(0x0000, TAG, `Failed to read file: ${path}, ${error.message}`);
@@ -94,7 +95,7 @@ export class FileUtils {
       }
 
       const file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
-      const encoder = new TextEncoder();
+      const encoder = new util.TextEncoder();
       const buffer = encoder.encodeInto(content);
       fs.writeSync(file.fd, buffer.buffer as ArrayBuffer);
       fs.closeSync(file);
@@ -241,10 +242,18 @@ export class FileUtils {
       if (!content) {
         return null;
       }
-      const encoder = new TextEncoder();
+      const encoder = new util.TextEncoder();
       const data = encoder.encodeInto(content);
-      const sha1Hash = await hash.hash(data.buffer as ArrayBuffer, 'SHA1');
-      return sha1Hash;
+      const md = cryptoFramework.createMd('SHA-1');
+      const blob: cryptoFramework.DataBlob = { data: data };
+      await md.update(blob);
+      const digest = await md.digest();
+      const bytes = digest.data;
+      let hex = '';
+      for (let i = 0; i < bytes.length; i++) {
+        hex += ('0' + bytes[i].toString(16)).slice(-2);
+      }
+      return hex;
     } catch {
       return null;
     }

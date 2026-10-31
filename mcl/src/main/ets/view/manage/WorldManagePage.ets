@@ -26,10 +26,14 @@ export struct WorldManagePage {
 
     this.saves = items.map(item => {
       const info: SaveInfo = {
-        ...item,
-        type: ManagedItemType.SAVE,
+        name: item.name,
+        path: item.path,
+        size: item.size,
+        lastModified: item.lastModified,
         isDirectory: true,
-        enabled: true
+        enabled: true,
+        type: ManagedItemType.SAVE,
+        metadata: item.metadata
       };
 
       // 读取 level.dat 信息

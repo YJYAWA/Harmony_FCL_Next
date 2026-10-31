@@ -7,7 +7,9 @@
  */
 import { FileUtils } from '../core/util/FileUtils';
 import { SettingsManager } from '../core/SettingsManager';
+import { AppContext } from '../common/AppContext';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import native from 'libfcl_native.so';
 
 const TAG = 'FCL-JarExecutor';
 
@@ -66,6 +68,10 @@ export class JarExecutorService {
 
   /**
    * 执行 JAR 文件
+   *
+   * 通过 NAPI 调用原生层（libfcl_native.so）：fork 子进程 → 子进程经
+   * jvmInit（含 OHOS 信号链桥）嵌入 JVM → 从 jar manifest 读取 Main-Class
+   * → 调用 main()。子进程 stdout/stderr 重定向到日志文件。
    */
   async execute(config: JarExecutorConfig, callbacks?: JarExecutorCallbacks): Promise<JarExecutorResult> {
     const startTime = Date.now();
@@ -78,56 +84,57 @@ export class JarExecutorService {
         throw new Error(`JAR file not found: ${config.jarPath}`);
       }
 
-      // 构建 JVM 命令行
+      // Java 运行时（<jdk>/bin/java 形式）
       const settings = SettingsManager.getInstance();
-      const javaPath = config.javaPath ?? settings.get('javaPath') ?? 'java';
+      const javaPath = config.javaPath ?? settings.get('javaPath') ?? '';
       const maxMem = config.maxMemory ?? 1024;
 
-      const command: string[] = [
-        javaPath,
-        `-Xmx${maxMem}M`,
-        ...config.jvmArgs,
-        '-jar', config.jarPath,
-        ...config.programArgs
-      ];
-
-      hilog.info(0x0000, TAG, `Command: ${command.join(' ')}`);
-
-      // ===== NAPI 调用点 =====
-      // TODO: 通过 NAPI 启动 JVM 子进程执行 JAR
-      // 类似 GameLauncherService 的做法
-      //
-      // const pid = native.executeJar(jarPath, jvmArgs, programArgs);
-      // const exitCode = await native.waitForProcess(pid);
-      //
-      // 当前为骨架实现, 模拟输出
-      // =======================
-
-      if (callbacks?.onOutput) {
-        callbacks.onOutput(`[FCL] Executing: ${command.join(' ')}`);
-        callbacks.onOutput(`[FCL] Java: ${javaPath}`);
+      if (!javaPath || !FileUtils.exists(javaPath)) {
+        throw new Error('Java runtime not found. Please download JDK first.');
       }
 
-      // 模拟执行过程
-      const mockOutput = [
-        'Starting JAR execution...',
-        'Loading libraries...',
-        'Processing...',
-        'Installation complete!'
-      ];
+      // 推导 JDK 根目录：<jdk>/bin/java → <jdk>
+      const binIndex = javaPath.lastIndexOf('/bin/');
+      if (binIndex <= 0) {
+        throw new Error(`Cannot derive JDK directory from javaPath: ${javaPath}`);
+      }
+      const jdkDir = javaPath.substring(0, binIndex);
 
-      for (const line of mockOutput) {
-        await this.delay(500);
-        if (callbacks?.onOutput) {
+      const workDir = config.workingDir ?? AppContext.filesDir;
+      const logFile = `${workDir}/installer_output.log`;
+      const jvmArgs: string[] = [`-Xmx${maxMem}M`, ...config.jvmArgs];
+
+      if (callbacks?.onOutput) {
+        callbacks.onOutput(`[FCL] Executing: ${config.jarPath}`);
+        callbacks.onOutput(`[FCL] JDK: ${jdkDir} (xmx=${maxMem}M)`);
+      }
+
+      // ===== NAPI 调用：fork 子进程执行安装器 =====
+      const exitCode = await native.executeJar(
+        AppContext.filesDir,
+        jdkDir,
+        config.jarPath,
+        jvmArgs,
+        config.programArgs,
+        workDir,
+        logFile,
+        maxMem
+      );
+
+      // 安装器输出已由 native 侧重定向到 logFile，读回传给回调
+      const output = FileUtils.readText(logFile) ?? '';
+      const outputLines = output.split('\n');
+      for (const line of outputLines) {
+        if (line.trim().length > 0 && callbacks?.onOutput) {
           callbacks.onOutput(line);
         }
       }
 
       const result: JarExecutorResult = {
-        success: true,
-        exitCode: 0,
-        stdout: mockOutput.join('\n'),
-        stderr: '',
+        success: exitCode === 0,
+        exitCode: exitCode,
+        stdout: output,
+        stderr: exitCode === 0 ? '' : `Installer exited with code ${exitCode} (native status: ${native.getStatus()})`,
         executionTime: Date.now() - startTime
       };
 
@@ -204,9 +211,5 @@ export class JarExecutorService {
       programArgs: [minecraftDir],
       workingDir: minecraftDir
     }, callbacks);
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

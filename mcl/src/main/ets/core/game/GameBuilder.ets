@@ -4,7 +4,7 @@
  *
  * 功能: 构建完整的 Minecraft 启动命令行和 JVM 参数
  */
-import { GameVersion, LaunchConfig, Library, LibraryRule, ModLoaderType } from './GameTypes';
+import { GameVersion, LaunchConfig, Library, ModLoaderType } from './GameTypes';
 import { Constants } from '../util/Constants';
 import { FileUtils } from '../util/FileUtils';
 import { LibraryAnalyzer } from './LibraryAnalyzer';

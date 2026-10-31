@@ -3,7 +3,6 @@
  * 使用 @ohos.net.http 封装 fetch 式 API
  */
 import { http } from '@kit.NetworkKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 
 /** 简化的 fetch 响应 */
 class FetchResponse {
@@ -20,8 +19,8 @@ class FetchResponse {
   get ok(): boolean { return this._ok; }
   get status(): number { return this._status; }
 
-  async json(): Promise<Record<string, Object>> {
-    return JSON.parse(this._body) as Record<string, Object>;
+  async json(): Promise<Object> {
+    return JSON.parse(this._body) as Object;
   }
 
   async text(): Promise<string> {

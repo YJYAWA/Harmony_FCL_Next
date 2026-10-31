@@ -13,6 +13,12 @@ export interface LoaderDetection {
   libraryId: string;
 }
 
+/** 版本补丁信息 */
+export interface VersionPatch {
+  id: string;
+  version: string;
+}
+
 /** 主类常量 */
 const VANILLA_MAIN = 'net.minecraft.client.main.Main';
 const LAUNCH_WRAPPER_MAIN = 'net.minecraft.launchwrapper.Launch';
@@ -96,7 +102,8 @@ export class LibraryAnalyzer {
 
     // 检查每个已知库类型
     for (const typeDef of KNOWN_LIBRARY_TYPES) {
-      if (!typeDef.modLoader) {
+      const loaderType = typeDef.modLoaderType;
+      if (!typeDef.modLoader || loaderType === null) {
         continue; // 跳过非模组加载器 (OptiFine, API等)
       }
 
@@ -104,7 +111,7 @@ export class LibraryAnalyzer {
         if (LibraryAnalyzer.matchesLibrary(lib, typeDef)) {
           const libVersion = LibraryAnalyzer.extractVersion(lib);
           detections.push({
-            type: typeDef.modLoaderType!,
+            type: loaderType,
             version: libVersion,
             libraryId: typeDef.patchId
           });
@@ -122,8 +129,8 @@ export class LibraryAnalyzer {
     }
 
     // 检查版本 patches
-    const patches = (version as Record<string, Object>)['patches'] as
-      Array<{ id: string; version: string }> | undefined;
+    const patches = (version as Object as Record<string, Object>)['patches'] as
+      VersionPatch[] | undefined;
     if (patches) {
       for (const patch of patches) {
         const existing = detections.find(d => d.libraryId === patch.id);
@@ -201,7 +208,10 @@ export class LibraryAnalyzer {
    */
   static hasOptiFine(version: GameVersion): boolean {
     const libraries = version.libraries ?? [];
-    const optiFineDef = KNOWN_LIBRARY_TYPES.find(t => t.patchId === 'optifine')!;
+    const optiFineDef = KNOWN_LIBRARY_TYPES.find(t => t.patchId === 'optifine');
+    if (!optiFineDef) {
+      return false;
+    }
 
     for (const lib of libraries) {
       if (LibraryAnalyzer.matchesLibrary(lib, optiFineDef)) {
@@ -236,7 +246,8 @@ export class LibraryAnalyzer {
         const libVersion = parts[2];
         const match = libVersion.match(forgeVersionPattern);
         if (match && match.groups) {
-          return match.groups['forge'];
+          const groups = match.groups as Record<string, string>;
+          return groups['forge'];
         }
       }
     }

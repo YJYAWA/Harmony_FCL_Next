@@ -46,6 +46,47 @@ const DEFAULT_THEME: ThemeConfig = {
   animationSpeed: 'normal'
 };
 
+/** 逐字段克隆主题配置 (替代对象展开) */
+function cloneThemeConfig(source: ThemeConfig): ThemeConfig {
+  const c: ThemeConfig = {
+    mode: source.mode,
+    accentColor: source.accentColor,
+    backgroundImage: source.backgroundImage,
+    backgroundOpacity: source.backgroundOpacity,
+    uiScale: source.uiScale,
+    blurEnabled: source.blurEnabled,
+    animationSpeed: source.animationSpeed
+  };
+  return c;
+}
+
+/** 合并主题配置补丁 (替代对象展开) */
+function mergeThemeConfig(base: ThemeConfig, patch: Partial<ThemeConfig>): ThemeConfig {
+  const merged = cloneThemeConfig(base);
+  if (patch.mode !== undefined) {
+    merged.mode = patch.mode;
+  }
+  if (patch.accentColor !== undefined) {
+    merged.accentColor = patch.accentColor;
+  }
+  if (patch.backgroundImage !== undefined) {
+    merged.backgroundImage = patch.backgroundImage;
+  }
+  if (patch.backgroundOpacity !== undefined) {
+    merged.backgroundOpacity = patch.backgroundOpacity;
+  }
+  if (patch.uiScale !== undefined) {
+    merged.uiScale = patch.uiScale;
+  }
+  if (patch.blurEnabled !== undefined) {
+    merged.blurEnabled = patch.blurEnabled;
+  }
+  if (patch.animationSpeed !== undefined) {
+    merged.animationSpeed = patch.animationSpeed;
+  }
+  return merged;
+}
+
 /** 深色主题色板 */
 export const DarkPalette = {
   background: '#1A1A2E',
@@ -87,7 +128,7 @@ export const LightPalette = {
  */
 export class ThemeEngine {
   private static instance: ThemeEngine | null = null;
-  private config: ThemeConfig = { ...DEFAULT_THEME };
+  private config: ThemeConfig = cloneThemeConfig(DEFAULT_THEME);
   private preferences: Preferences | null = null;
   private listeners: Array<(config: ThemeConfig) => void> = [];
 
@@ -102,7 +143,7 @@ export class ThemeEngine {
   }
 
   get themeConfig(): ThemeConfig {
-    return { ...this.config };
+    return cloneThemeConfig(this.config);
   }
 
   /** 获取当前色板 */
@@ -133,15 +174,15 @@ export class ThemeEngine {
     if (stored && typeof stored === 'string' && stored.length > 0) {
       try {
         const parsed = JSON.parse(stored) as Partial<ThemeConfig>;
-        this.config = { ...DEFAULT_THEME, ...parsed };
+        this.config = mergeThemeConfig(DEFAULT_THEME, parsed);
       } catch {
-        this.config = { ...DEFAULT_THEME };
+        this.config = cloneThemeConfig(DEFAULT_THEME);
       }
     }
   }
 
   async updateConfig(patch: Partial<ThemeConfig>): Promise<void> {
-    this.config = { ...this.config, ...patch };
+    this.config = mergeThemeConfig(this.config, patch);
 
     if (this.preferences) {
       await this.preferences.put('theme_config', JSON.stringify(this.config));

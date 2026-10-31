@@ -3,13 +3,13 @@
  * 移植自: FCL/ui/main/
  * 显示版本列表、快速启动、最近游玩
  */
-import { display } from '@kit.ArkUI';
 import { VersionManager } from '../../core/game/VersionManager';
-import { BMCLAPIDownloadProvider, RemoteVersion, VersionType } from '../../core/download/DownloadProvider';
-import { GameLauncherService } from '../../service/GameLauncherService';
-import { SettingsManager, LauncherSettings } from '../../core/SettingsManager';
+import { BMCLAPIDownloadProvider, RemoteVersion } from '../../core/download/DownloadProvider';
+import { GameLauncherService, LaunchResult } from '../../service/GameLauncherService';
+import { SettingsManager } from '../../core/SettingsManager';
 import { FileUtils } from '../../core/util/FileUtils';
 import { LaunchConfig } from '../../core/game/GameTypes';
+import { NavigationService, RouteNames } from '../../common/NavigationRouter';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'FCL-MainPage';
@@ -54,7 +54,6 @@ export struct MainPage {
     }
   }
 
-  @Builder
   build() {
     Column() {
       // 顶部标题栏
@@ -321,10 +320,10 @@ export struct MainPage {
     this.showLaunchDialog = true;
 
     const gameDir = FileUtils.getMinecraftDir();
-    const javaPath = this.settings.get('javaPath') || 'java';
-    const minMemory = this.settings.get('minMemory');
-    const maxMemory = this.settings.get('maxMemory');
-    const extraJVMArgs = this.settings.get('extraJVMArgs').split(' ').filter(a => a.length > 0);
+    const javaPath = this.settings.settings.javaPath || 'java';
+    const minMemory = this.settings.settings.minMemory;
+    const maxMemory = this.settings.settings.maxMemory;
+    const extraJVMArgs = this.settings.settings.extraJVMArgs.split(' ').filter((a: string): boolean => a.length > 0);
 
     const config: LaunchConfig = {
       version,
@@ -333,26 +332,33 @@ export struct MainPage {
       minMemory,
       maxMemory,
       extraJVMArgs,
-      windowWidth: this.settings.get('windowWidth'),
-      windowHeight: this.settings.get('windowHeight'),
-      fullscreen: this.settings.get('fullscreen'),
+      windowWidth: this.settings.settings.windowWidth,
+      windowHeight: this.settings.settings.windowHeight,
+      fullscreen: this.settings.settings.fullscreen,
       authUsername: 'Player',
       authUUID: '00000000-0000-0000-0000-000000000000',
       authAccessToken: 'offline',
       demo: false
     };
 
-    const result = await this.launcher.launchGame(config);
+    // launchGame 的 Promise 在游戏 main() 返回后才 resolve（native 侧阻塞），
+    // 因此这里不 await：立即导航到游戏页面，退出码由后台任务消费。
+    const launchPromise = this.launcher.launchGame(config);
 
-    if (result.success) {
-      this.launchProgress = `Game started! PID: ${result.pid}`;
-    } else {
-      this.launchProgress = `Failed: ${result.error}`;
-    }
+    // 进入全屏游戏页（XComponent 由 AMCL 图形栈接管渲染）
+    NavigationService.push(RouteNames.GAME);
 
-    setTimeout(() => {
+    launchPromise.then((result: LaunchResult) => {
+      if (result.success) {
+        this.launchProgress = `Game exited (code ${result.pid}).`;
+      } else {
+        this.launchProgress = `Failed: ${result.error}`;
+      }
       this.showLaunchDialog = false;
-    }, 3000);
+    }).catch((err: ESObject) => {
+      this.launchProgress = `Failed: ${String(err)}`;
+      this.showLaunchDialog = false;
+    });
   }
 
   async installVersion(version: string): Promise<void> {

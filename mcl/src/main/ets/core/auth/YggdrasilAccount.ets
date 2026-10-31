@@ -31,12 +31,33 @@ export interface YggdrasilServer {
   registerUrl?: string;
 }
 
+/** Yggdrasil 认证代理 (agent) */
+interface YggdrasilAgent {
+  name: string;
+  version: number;
+}
+
+/** 角色基本信息 */
+export interface ProfileInfo {
+  id: string;
+  name: string;
+}
+
+/** 用户属性键值对 */
+export interface UserProperty {
+  name: string;
+  value: string;
+}
+
+/** 用户信息 */
+export interface UserInfo {
+  id: string;
+  properties: UserProperty[];
+}
+
 /** Yggdrasil 登录请求 */
 interface YggdrasilAuthRequest {
-  agent: {
-    name: string;
-    version: number;
-  };
+  agent: YggdrasilAgent;
   username: string;
   password: string;
   clientToken: string;
@@ -47,18 +68,9 @@ interface YggdrasilAuthRequest {
 interface YggdrasilAuthResponse {
   accessToken: string;
   clientToken: string;
-  availableProfiles: Array<{
-    id: string;
-    name: string;
-  }>;
-  selectedProfile?: {
-    id: string;
-    name: string;
-  };
-  user?: {
-    id: string;
-    properties: Array<{ name: string; value: string }>;
-  };
+  availableProfiles: ProfileInfo[];
+  selectedProfile?: ProfileInfo;
+  user?: UserInfo;
   error?: string;
   errorMessage?: string;
 }
@@ -67,10 +79,7 @@ interface YggdrasilAuthResponse {
 interface YggdrasilRefreshResponse {
   accessToken: string;
   clientToken: string;
-  selectedProfile: {
-    id: string;
-    name: string;
-  };
+  selectedProfile: ProfileInfo;
   error?: string;
   errorMessage?: string;
 }

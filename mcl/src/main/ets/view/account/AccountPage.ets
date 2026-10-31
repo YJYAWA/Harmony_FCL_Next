@@ -12,6 +12,11 @@ import { promptAction } from '@kit.ArkUI';
 
 const ACCOUNTS_FILE = 'fcl_accounts.json';
 
+/** 选中账号索引的持久化结构 */
+interface SavedIndex {
+  index: number;
+}
+
 @ComponentV2
 export struct AccountPage {
   @Local accounts: Account[] = [];
@@ -46,7 +51,7 @@ export struct AccountPage {
 
     // 恢复选中状态
     const selectedPath = `${AppContext.filesDir}/fcl_selected_account.json`;
-    const selected = FileUtils.readJSON<{ index: number }>(selectedPath);
+    const selected = FileUtils.readJSON<SavedIndex>(selectedPath);
     if (selected && selected.index >= 0 && selected.index < this.accounts.length) {
       this.selectedAccountIndex = selected.index;
     }
@@ -59,7 +64,8 @@ export struct AccountPage {
 
     // 保存选中状态
     const selectedPath = `${AppContext.filesDir}/fcl_selected_account.json`;
-    FileUtils.writeJSON(selectedPath, { index: this.selectedAccountIndex });
+    const saved: SavedIndex = { index: this.selectedAccountIndex };
+    FileUtils.writeJSON(selectedPath, saved);
   }
 
   build() {
@@ -193,7 +199,7 @@ export struct AccountPage {
           .borderRadius(6)
           .padding({ left: 12, right: 12, top: 6, bottom: 6 })
           .margin({ left: 6 })
-          .onClick(() => this.microsoftLogin(account as MicrosoftAccount))
+          .onClick(() => this.microsoftLogin(account as Object as MicrosoftAccount))
       }
 
       // 删除按钮
@@ -305,7 +311,7 @@ export struct AccountPage {
         .margin({ bottom: 8 })
         .onChange((value: string) => {
           // 存储到临时变量
-          AppContext.context['tempOfflineName'] = value;
+          AppStorage.setOrCreate('tempOfflineName', value);
         })
 
       Button('Create Offline Account')
@@ -316,7 +322,7 @@ export struct AccountPage {
         .padding(12)
         .width('100%')
         .onClick(() => {
-          const name = AppContext.context['tempOfflineName'] as string ?? 'Player';
+          const name = AppStorage.get<string>('tempOfflineName') ?? 'Player';
           const account = new OfflineAccount({ username: name });
           this.accounts.push(account);
           this.saveAccounts();

@@ -2,12 +2,6 @@
  * Navigation 路由系统
  * 所有页面路由定义和 Builder 映射
  */
-import { MainPage } from '../view/main/MainPage';
-import { SettingsPage } from '../view/setting/SettingsPage';
-import { AccountPage } from '../view/account/AccountPage';
-import { DownloadPage } from '../view/download/DownloadPage';
-import { ManagePage } from '../view/manage/ManagePage';
-import { MultiplayerPage } from '../view/multiplayer/MultiplayerPage';
 import { GameLogViewer } from '../view/common/GameLogViewer';
 import { FileBrowser, FileBrowserConfig } from '../view/common/FileBrowser';
 import { CrashReportView } from '../view/common/CrashReporter';
@@ -34,6 +28,7 @@ export class RouteNames {
   static readonly ABOUT = 'about';
   static readonly JAVA_MANAGE = 'javaManage';
   static readonly CONTROL_EDITOR = 'controlEditor';
+  static readonly GAME = 'game';
 }
 
 @Builder

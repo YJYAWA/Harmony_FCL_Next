@@ -1,153 +1,133 @@
-# FCL-HarmonyOS
+# HarmonyFCL Next
 
-> **Fold Craft Launcher for HarmonyOS NEXT** — Minecraft: Java Edition 原生鸿蒙启动器
+> **HarmonyOS NEXT（纯血鸿蒙）原生 Minecraft: Java Edition 启动器** — 无容器、无 Android 运行时，JVM 进程内嵌入。
 
-[![HarmonyOS](https://img.shields.io/badge/HarmonyOS-NEXT-red)](https://developer.huawei.com/consumer/cn/harmonyos/)
-[![API](https://img.shields.io/badge/API-24-blue)](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-V5/harmonyos-overview-V5)
-[![DevEco Studio](https://img.shields.io/badge/DevEco%20Studio-6.1.1-lightgrey)](https://developer.huawei.com/consumer/cn/deveco-studio/)
-[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+本仓库是 [Mr-ETsir/FCL-HarmonyOS](https://github.com/Mr-ETsir/FCL-HarmonyOS) 的原生层补全版：
+把 [AMCL](https://github.com/LZZLHY/amcl) 已在真机验证的完整原生栈（JVM 嵌入、GLFW 兼容层、
+MobileGlues / MobileGL 渲染器、OpenAL 音频）移植进来，使这个启动器从"ArkTS 界面骨架"
+变成**可以真正启动游戏的应用**。
 
-## 项目来历
+姊妹项目：[HarmonyFCL](https://github.com/YJYAWA/HarmonyFCL)（Android 侧方案——卓易通容器 +
+麒麟 SoC 适配）。本项目与其互补：**原生鸿蒙路线，不依赖任何 Android 容器**。
 
-本项目是 [Fold Craft Launcher (FCL)](https://github.com/FCL-Team/FoldCraftLauncher) 到 **HarmonyOS NEXT (纯鸿蒙)** 的原生移植。
+## 它解决什么问题
 
-**FCL** 是基于 [HMCL](https://github.com/HMCL-dev/HMCL) 核心功能、使用 [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher) 后端的 Android 平台 Minecraft: Java Edition 启动器。本项目将其 **1,104 个 Java/Kotlin 源文件（~161,000 行）** 完整复刻为 **46 个 ArkTS 源文件（~11,000 行）** ，运行于 HarmonyOS NEXT。
+上游 FCL-HarmonyOS 复刻了 FCL 的 46 个 ArkTS 文件（~11,000 行），但有四个"坎"没过：
 
-## 技术验证
+1. **NAPI C/C++ 桥接层完全缺失** — `launchJVM` 是注释里的 TODO，`JarExecutorService`
+   返回伪造的"安装成功"。本 fork 从 AMCL 移植了整套 JVM 嵌入栈（自研 ELF loader 绕过
+   MAP_XPM 签名校验加载 libjvm.so + OHOS sigchain 信号桥 + `JNI_CreateJavaVM` 进程内嵌入）。
+2. **图形栈为零** — 没有 XComponent 页面、没有 GL。本 fork 移植 AMCL 的 GLFW 兼容层 +
+   MobileGlues（GL→GLES 3.2）+ MobileGL（DirectVulkan）+ OpenAL（OHAudio 后端）。
+3. **约 40 处 ArkTS 严格模式编译错误 + 30 处死 import** — 全部修复，51 个编译错误清零，
+   `hvigorw assembleHap` 可以一键出包。
+4. **安装器 mock** — Forge/Fabric/OptiFine 安装器此前拿到的是伪造成功。现在走
+   fork 子进程 + 真实 JVM（从 jar manifest 读取 Main-Class）。
 
-底层方案已被社区项目验证可行：
+## 本 fork 改了什么
 
-| 组件 | 方案 | 来源 |
-|------|------|------|
-| JDK 运行时 | OpenJDK 8/17/21/25 for HarmonyOS (musl, aarch64) | [AMCL](https://github.com/LZZLHY/mc-ohos-resources) |
-| OpenGL 翻译 | MobileGlues (GL → GLES 3.2) | [MobileGL-Dev](https://github.com/MobileGL-Dev/MobileGlues-release) |
-| GLFW 适配 | XComponent 兼容层 | 自研 (参考 AMCL) |
-| 音频 | OpenAL Soft + OHAudio | 自研 |
+| 改动 | 说明 |
+|---|---|
+| 原生层全量移植 | AMCL 的 `libentry/libglfw/libamcl_gl_host/libamcl_input_runtime/libamcl_graphics_runtime/libamcl_window_host/libamcl_vulkan_wsi/libamcl_lwjgl_egl/libopenal/libjni_reregister` 全 target |
+| JVM 启动路径 | FCL 的 `buildLaunchCommand` argv 模型 → native 侧解析（`-Xmx`/`-cp`/主类/`--gameDir`）→ AMCL `jvmInit` + `jvmCallMain` |
+| 安装器子进程 | `fcl_fork_jar.cpp`：纯 C ZIP manifest 解析（不依赖 JVM）+ AMCL fork 保留协议 |
+| 关键适配 | 移除 AMCL 的 `-Djava.system.class.loader=AmclClassLoader`（FCL 无 amcl-launcher.jar，注入必炸 `JNI_CreateJavaVM`） |
+| 游戏页面 | 全屏 XComponent（`libraryname: 'entry'`，AMCL 同款接法）+ 触控覆盖层 |
+| 渲染器管理 | 新增 MobileGlues / **MobileGL**（MC 26.3+ 需要）选项 |
+| ArkTS 修复 | 51 个严格模式编译错误清零（Kit 导出名、索引访问类型重设计、`util.TextEncoder` 替换等） |
+| 应用身份 | 包名 `com.harmony.fcl`（与 HarmonyFCL 一致）、应用名 HarmonyFCL_Next、HarmonyFCL 图标 |
 
-> 📄 详细可行性分析见 [原项目 docs/feasibility-report-harmonyos-next.md](https://github.com/FCL-Team/FoldCraftLauncher/blob/main/docs/feasibility-report-harmonyos-next.md)
+## 应用身份
 
-## 项目文件结构
+| 项 | 值 |
+|---|---|
+| bundleName | `com.harmony.fcl` |
+| 应用名 | HarmonyFCL_Next |
+| 版本 | 1.0.0 (1000000) |
+| SDK | HarmonyOS 6.1.1（API 24） |
+| 架构 | arm64-v8a |
+| 关键权限 | `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（ACL，JIT 必需） |
 
-```
-FCL_HarmonyOS/
-├── AppScope/app.json5               # 应用全局配置
-├── build-profile.json5              # 项目构建配置 (DevEco 6.1.1)
-├── oh-package.json5                 # 依赖管理
-├── hvigorfile.ts                    # Hvigor 构建脚本
-└── mcl/src/main/
-    ├── module.json5                 # 模块配置 + 权限声明
-    ├── ets/                         # 所有 ArkTS 源码
-    │   ├── entryability/            # UIAbility 入口
-    │   ├── pages/Index.ets          # 主页面 (Navigation 路由 + 6 Tab)
-    │   ├── common/                  # AppContext + NavigationRouter
-    │   ├── core/                    # ═══ 核心业务逻辑 ═══
-    │   │   ├── auth/                # 认证: Microsoft OAuth / Yggdrasil / 离线
-    │   │   ├── download/            # 下载管理: 队列并发 + 进度
-    │   │   ├── game/                # 游戏逻辑: 版本管理 / 模组 / 安装器 / LibraryAnalyzer / GameBuilder
-    │   │   ├── input/               # 键码映射 (AWT/GLFW/Minecraft)
-    │   │   ├── upgrade/             # 更新检查器
-    │   │   └── util/                # Constants / FileUtils / UUID / Architecture / HttpUtils
-    │   ├── viewmodel/               # MVVM ViewModel
-    │   ├── service/                 # GameLauncherService / JarExecutorService
-    │   └── view/                    # ═══ UI 页面 (12 个) ═══
-    │       ├── main/MainPage.ets    # 主页: 快速启动 + 版本列表
-    │       ├── download/            # 下载中心: 搜索/筛选/安装进度
-    │       ├── manage/              # 资源管理 + 世界存档管理
-    │       ├── account/             # 账号管理 (Microsoft/离线/Yggdrasil)
-    │       ├── setting/             # 设置 + 关于 + Java 管理
-    │       ├── version/             # 版本详情 + Profile 管理
-    │       ├── multiplayer/         # 服务器列表管理
-    │       ├── control/             # 触控覆盖层 + 控件编辑器
-    │       └── common/              # FileBrowser / GameLogViewer / CrashReporter
-    └── resources/                  # 资源文件
-```
+## 渲染器
 
-## 复刻进度
+`设置 → Java/渲染器管理`：
 
-### ✅ 已完成 (ArkTS 层 ~92%)
+- **MobileGlues**（默认）— GL→GLES 3.2 翻译，AMCL 实测 1.20.4 全链路通过。需要
+  `AppScope/app.json5` 的 `appEnvironments.NEED_OPENGL=1`（已配置，必须在进程首次 EGL
+  调用前生效）。
+- **MobileGL** — DirectVulkan 渲染器，**MC 26.3+ 版本需要**。`libmobilegl.so` 随 HAP 分发。
+- GL4ES / VirGL / Zink — legacy 路径。
 
-| 原 FCL 系统 | 状态 | 文件 |
-|------------|------|------|
-| 认证系统 (Microsoft/Yggdrasil/Offline) | ✅ 100% | `auth/AuthTypes`, `MicrosoftAccount`, `YggdrasilAccount`, `OfflineAccount`, `AccountFactory` |
-| 下载系统 (多源/队列/进度) | ✅ 95% | `download/DownloadProvider`, `DownloadManager` |
-| 版本管理 (安装/删除/资源) | ✅ 95% | `game/VersionManager` |
-| 模组加载器 (Fabric/Forge/OptiFine) | ✅ 90% | `game/ModLoaderInstaller` |
-| 资源管理 (Mod/资源包/光影/存档) | ✅ 90% | `game/ModManager` |
-| LibraryAnalyzer (模组检测) | ✅ 100% | `game/LibraryAnalyzer` |
-| GameBuilder (启动参数构建) | ✅ 100% | `game/GameBuilder` |
-| 设置系统 (Theme/Source/Lang/Memory) | ✅ 100% | `SettingsManager`, `ThemeEngine` |
-| 键码映射 (AWT/GLFW/MC) | ✅ 100% | `input/KeyCodes` |
-| 更新检查 | ✅ 90% | `upgrade/UpdateChecker` |
-| 主页 UI (快速启动/版本列表) | ✅ 95% | `view/main/MainPage` |
-| 下载中心 UI (搜索/筛选/安装) | ✅ 95% | `view/download/DownloadPage` |
-| 资源管理 UI (4 类型 Tab) | ✅ 90% | `view/manage/ManagePage` |
-| 世界存档管理 UI | ✅ 90% | `view/manage/WorldManagePage` |
-| 账号管理 UI (3 认证模式) | ✅ 95% | `view/account/AccountPage` |
-| 设置 UI (6 大类配置) | ✅ 95% | `view/setting/SettingsPage` |
-| 关于/帮助页面 | ✅ 90% | `view/setting/AboutPage` |
-| Java/渲染器管理 | ✅ 85% | `view/setting/JavaManagePage` |
-| 版本详情 UI | ✅ 90% | `view/version/VersionDetailPage` |
-| Profile 管理 UI | ✅ 90% | `view/version/VersionsPage` |
-| 服务器管理 UI | ✅ 90% | `view/multiplayer/MultiplayerPage` |
-| 触控覆盖层 (按钮/方向/触摸板) | ✅ 85% | `view/control/TouchController` |
-| 控件编辑器 (拖拽/属性/24 模板) | ✅ 90% | `view/control/ControlEditor` |
-| 文件浏览器 (面包屑/筛选/多选) | ✅ 85% | `view/common/FileBrowser` |
-| 游戏控制台 (实时日志/过滤/导出) | ✅ 85% | `view/common/GameLogViewer` |
-| 崩溃报告 (捕获/持久化/导出) | ✅ 90% | `view/common/CrashReporter` |
-| 路由系统 (NavPathStack) | ✅ 100% | `common/NavigationRouter` |
-| 多设备适配 (手机/平板/PC) | ✅ 90% | `pages/Index` (5 级断点) |
+## JDK 运行时
 
-### 🟡 进行中 (需 DevEco 编译通过)
+| MC 版本 | JDK | mc-ohos-resources 资产 |
+|---|---|---|
+| 1.7.10–1.12.2 | 8 | `v8u452-ohos-4` |
+| 1.13–1.20.x | 17 | `v17.0.13-ohos-5` → `jdk17-ohos-full-v5.zip` |
+| 1.20.5+ | 21 | `v21.0.5-ohos-7` |
+| 26.1+ | 25 | `v25.0.4-ohos-1` → `jdk25-ohos-full.zip` |
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| ArkTS 编译 | 🟡 修复中 | ~123 编译错误，主要是严格类型检查 |
-| DevEco 同步 | ✅ 已解决 | DevEco 6.1.1 项目模板已生成 |
-
-### ❌ 未完成 (需特定环境)
-
-| 项目 | 原因 | 需要 |
-|------|------|-----|
-| NAPI C/C++ 桥接层 | WSL 无鸿蒙 NDK | DevEco Studio on Windows + 鸿蒙 NDK |
-| JVM 进程启动 | 需 NAPI 实现 | 参考 AMCL 的 posix_spawn 方案 |
-| EGL/OpenGL 上下文 | 需 NAPI 实现 | 参考 MobileGlues + XComponent |
-| 输入事件注入 JVM | 需 NAPI 实现 | 参考 FCLauncher input_bridge_v3.c |
-| Terracotta P2P | Rust 源码不在仓库 | 获取源码 + 鸿蒙 NDK 重编译 |
-| LWJGL 兼容层 | 被 MobileGlues 替代 | 外部项目已解决 |
+启动器内下载，或手动解压到沙箱 `filesDir/jdk/<版本>/`（布局 `lib/server/libjvm.so`）。
 
 ## 构建
 
-### 前置要求
-
-- **DevEco Studio** 6.1.1+
-- **HarmonyOS SDK** API 24
-- **华为开发者账号** (已实名认证)
-
-### 步骤
+前置：DevEco Studio 6.1.1+（自带 SDK 与 hvigor/ohpm/llvm 工具链）。
 
 ```bash
-# 1. 用 DevEco Studio 打开本目录
-# File → Open → 选择 FCL_HarmonyOS
+# MobileGlues 源码（GL 翻译层即时编译必需；LGPL 合规也要求随源分发，本仓库已 vendored）
+# git clone --depth 1 -b amcl/2.0-ohos https://github.com/LZZLHY/MobileGlues.git mcl/prebuilt/mobileglues/mg_src
+#   并 checkout 8b69f7fee6c11a46d325731f29ef6b5008da2878 + git submodule update --init --depth 1
 
-# 2. 配置签名
-# File → Project Structure → Signing Configs → 自动生成
-
-# 3. 编译
-# Build → Build HAP(s)
+ohpm install
+hvigorw --mode module -p module=mcl@default -p product=default assembleHap --no-daemon
+# 产物: mcl/build/default/outputs/default/mcl-default-unsigned.hap
 ```
 
-## 致谢
+环境变量：`DEVECO_SDK_HOME` 指向 DevEco SDK（如 `E:\DevEcoStudio\sdk`）。
+`openal-soft` 已按 AMCL `deps.lock` pin 到 1.24.3 并打好 OHAudio 补丁，无需额外操作。
+
+## 安装（侧载）与 JIT 权限
+
+本项目**未上架应用市场**，与 AMCL 一样走侧载（流程同
+[AMCL 官方安装指南](https://amcl.lovedhy.cn/docs/install-hokit)）：
+
+1. 用 [HoKit](https://www.sydxky.cn/hokit.php)（华为账号授权签名 + USB 一键签装）或
+   DevEco 对 unsigned HAP 做个人签名后安装。
+2. **JIT 权限**（`ALLOW_WRITABLE_CODE_MEMORY`）是受限权限，"时有时无"。启动报
+   「JIT 不可用」时按 [AMCL no-jit 指南](https://amcl.lovedhy.cn/docs/no-jit)：
+   **清空全部后台（包括微信）→ 单独打开微信 → 再打开启动器**；仍失败重启设备再试。
+
+## HOA 兼容（在 Android 上运行本 HAP）
+
+[HOA](https://github.com/harmony-on-android/HOA) 可让 OpenHarmony HAP 免修改运行在
+Android 11+ arm64 设备上。本项目按其兼容边界做了确认：
+
+- ✅ 标准 HAP 结构（modules.abc + resources.index + libs/arm64-v8a），HapInstaller 可直接解析
+- ✅ musl ABI bridge（libb.so）拓扑加载依赖链；Android 上 RWX 匿名映射默认可用，
+  **JIT 可用性反而优于部分鸿蒙真机**
+- ⚠️ HOA 未实现 Bundle Manager / 后台 Service：`KEEP_BACKGROUND_RUNNING` 等权限被忽略（降级不崩溃）
+- ⚠️ HOA 目前支持 SDK 5.0/6.0 ABC 格式；本项目 targetSdk 6.1.1(24)，格式兼容以其适配进展为准
+
+## 它不会做什么
+
+- 不内置 JDK/MC 产物（体积与合规原因，运行期按需下载，来源与校验和见 `runtime/` 说明）
+- 不绕过任何设备签名/授权机制——ELF loader 只绕过**应用沙箱内**已下载 libjvm.so 的
+  MAP_XPM 校验，这需要 ACL 权限本身被授予
+- 不做启动环境检测（与 HarmonyFCL 的立场一致：都用实测过，别想当然）
+
+## 许可与致谢
+
+应用本体 **GPL-3.0**（见 [LICENSE](./LICENSE)）；第三方组件许可见
+[NOTICE.md](./NOTICE.md)（MobileGlues / MobileGL / OpenAL Soft 的源码均已随仓库 vendored 以满足 LGPL 合规）。
 
 | 项目 | 说明 |
-|------|------|
-| [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) | 原始 Android 启动器 (GPL-3.0) |
-| [HMCL](https://github.com/HMCL-dev/HMCL) | 核心启动器逻辑 |
-| [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher) | Android Minecraft 后端 |
-| [AMCL](https://github.com/LZZLHY/amcl) | 鸿蒙 Minecraft 启动器 (技术方案验证) |
-| [MobileGlues](https://github.com/MobileGL-Dev/MobileGlues-release) | GL → GLES 翻译层 |
+|---|---|
+| [Fold Craft Launcher](https://github.com/FCL-Team/FoldCraftLauncher) | 原始 Android 启动器（GPL-3.0） |
+| [HarmonyFCL](https://github.com/YJYAWA/HarmonyFCL) | Android 侧姊妹项目（卓易通容器路线），本仓库 README 与合规结构参考它 |
+| [AMCL](https://github.com/LZZLHY/amcl) | 鸿蒙原生启动器，本项目原生层的直接来源（GPL-3.0） |
+| [MobileGlues](https://github.com/LZZLHY/MobileGlues) | GL→GLES 翻译层（LGPL-2.1） |
+| [PojavLauncher](https://github.com/PojavLauncherTeam/PojavLauncher) | Android Minecraft 后端（输入桥设计血统） |
+| [mc-ohos-resources](https://github.com/LZZLHY/mc-ohos-resources) | OpenJDK for HarmonyOS 运行时 |
 
-## 许可
-
-本项目采用 **GPL-3.0 License**，遵循上游 FoldCraftLauncher 的许可协议。
-
-"Minecraft" 是 Mojang Studios 的商标。本项目与 Mojang Studios、Microsoft Corporation 无关联。
+> **非官方修改版**，与 FoldCraftLauncher 官方团队、AMCL 作者、MobileGlues 官方团队、
+> Mojang Studios、Microsoft、华为均无关联或背书。"Minecraft" 是 Mojang Studios 的商标。

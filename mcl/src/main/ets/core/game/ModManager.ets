@@ -5,7 +5,6 @@
 import { FileUtils } from '../util/FileUtils';
 import { Constants } from '../util/Constants';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppContext } from '../../common/AppContext';
 
 const TAG = 'FCL-ModManager';
 
@@ -69,6 +68,13 @@ export interface SaveInfo extends ManagedItem {
   gameMode?: string;
   lastPlayed?: number;
   iconPath?: string;
+}
+
+/** 文件统计信息 */
+export interface FileStatInfo {
+  size: number;
+  lastModified: number;
+  isDirectory: boolean;
 }
 
 /**
@@ -165,7 +171,7 @@ export class ResourceManager {
   }
 
   /** 获取文件统计 */
-  private static getFileStat(path: string): { size: number; lastModified: number; isDirectory: boolean } {
+  private static getFileStat(path: string): FileStatInfo {
     const size = FileUtils.getSize(path);
     const isDirectory = FileUtils.isDirectory(path);
     return {

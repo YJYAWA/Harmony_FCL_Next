@@ -1,4 +1,4 @@
-import { httpGet, httpPost } from '../../core/util/HttpUtils';
+import { httpGet } from '../../core/util/HttpUtils';
 /**
  * 下载中心完整页面
  * 移植自: FCL/ui/download/
@@ -8,9 +8,6 @@ import { VersionManager, InstallProgress } from '../../core/game/VersionManager'
 import { BMCLAPIDownloadProvider, RemoteVersion, VersionType } from '../../core/download/DownloadProvider';
 import { ModLoaderType } from '../../core/game/GameTypes';
 import { promptAction } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-const TAG = 'FCL-DownloadPage';
 
 /** 模组加载器版本条目 */
 interface ModLoaderVersion {
@@ -64,7 +61,13 @@ export struct DownloadPage {
     try {
       const response = await httpGet('https://meta.fabricmc.net/v2/versions/loader');
       const data = await response.json() as Array<Record<string, Object>>;
-      this.fabricVersions = data.slice(0, 20);
+      this.fabricVersions = data.slice(0, 20).map(item => {
+        const v: ModLoaderVersion = {
+          version: item['version'] as string,
+          stable: item['stable'] as boolean
+        };
+        return v;
+      });
     } catch {
       // Fabric 元数据加载失败, 不影响主流程
     }
@@ -244,11 +247,11 @@ export struct DownloadPage {
         Progress({
           value: this.installProgress.totalFiles > 0 ?
             this.installProgress.completedFiles / this.installProgress.totalFiles * 100 : 0,
-          total: 100
+          total: 100,
+          type: ProgressType.Capsule
         })
           .width('100%')
           .color('#E94560')
-          .style(ProgressStyle.Capsule)
 
         Text(`${this.installProgress.completedFiles} / ${this.installProgress.totalFiles} files`)
           .fontSize(14).fontColor('#CCCCCC').margin({ top: 12 })

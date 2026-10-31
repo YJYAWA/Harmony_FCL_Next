@@ -2,7 +2,8 @@
  * FCL-HarmonyOS 入口 Ability
  * 对应 Android 的 MainActivity
  */
-import { UIAbility, Want, AbilityConstant, window, WindowStage } from '@kit.AbilityKit';
+import { UIAbility, Want, AbilityConstant } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppContext } from '../common/AppContext';
@@ -19,7 +20,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, TAG, 'EntryAbility onDestroy');
   }
 
-  onWindowStageCreate(windowStage: WindowStage): void {
+  onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(0x0000, TAG, 'onWindowStageCreate');
 
     windowStage.loadContent('pages/Index', (err: BusinessError) => {

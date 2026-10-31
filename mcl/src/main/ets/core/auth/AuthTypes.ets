@@ -11,9 +11,17 @@ export enum AccountType {
   YGGDRASIL = 'yggdrasil'
 }
 
-/** 认证信息 (对应 AuthInfo) */
-export class AuthInfo {
+/** AuthInfo 序列化格式 */
+export interface AuthInfoJSON {
   username: string;
+  uuid: string;
+  accessToken: string;
+  userType: string;
+  userProperties: Record<string, string>;
+}
+
+/** 认证信息 (对应 AuthInfo) */
+export class AuthInfo {  username: string;
   uuid: string;
   accessToken: string;
   userType: string;
@@ -38,7 +46,7 @@ export class AuthInfo {
     return this.accessToken.length > 0 && this.uuid.length > 0;
   }
 
-  toJSON(): Record<string, Object> {
+  toJSON(): AuthInfoJSON {
     return {
       username: this.username,
       uuid: this.uuid,
@@ -61,9 +69,14 @@ export class AuthInfo {
 
 /** 认证异常 */
 export class AuthenticationException extends Error {
-  constructor(message: string, public readonly cause?: Error) {
+  readonly cause?: Error;
+
+  constructor(message: string, cause?: Error) {
     super(message);
     this.name = 'AuthenticationException';
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
   }
 }
 
@@ -133,7 +146,7 @@ export interface Account {
   /** 离线模式 */
   playOffline(): Promise<AuthInfo>;
   /** 序列化为存储格式 */
-  toStorage(): Record<string, Object>;
+  toStorage(): Object;
   /** 清除缓存 */
   clearCache(): void;
 }

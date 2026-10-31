@@ -1,4 +1,4 @@
-import { httpGet, httpPost } from '../util/HttpUtils';
+import { httpGet } from '../util/HttpUtils';
 /**
  * 模组加载器安装器
  * 移植自: FCLCore/download/ 中的 Forge/Fabric/OptiFine 安装逻辑
@@ -28,6 +28,26 @@ export interface InstallResult {
   installedVersionId?: string;
 }
 
+/** 模组加载器版本信息 (Fabric Loader 版本列表项) */
+export interface ModLoaderVersion {
+  version: string;
+  stable: boolean;
+}
+
+/** 库文件下载信息 */
+export interface LibraryFile {
+  path: string;
+  url: string;
+  sha1: string;
+}
+
+/** OptiFine 版本列表项 */
+export interface OptiFineVersion {
+  mcversion: string;
+  type: string;
+  patch: string;
+}
+
 /** Fabric 版本元数据 */
 interface FabricLoaderMeta {
   loader: FabricVersionEntry[];
@@ -49,10 +69,21 @@ export class FabricInstaller {
   private static readonly META_URL = 'https://meta.fabricmc.net/v2';
 
   /** 获取可用 Loader 版本 */
-  static async getLoaderVersions(): Promise<Array<{ version: string; stable: boolean }>> {
+  static async getLoaderVersions(): Promise<ModLoaderVersion[]> {
     try {
       const response = await httpGet(`${FabricInstaller.META_URL}/versions/loader`);
-      return await response.json() as Array<Record<string, Object>>;
+      const raw = await response.json() as Array<Record<string, Object>>;
+      const result: ModLoaderVersion[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const item = raw[i];
+        const stableRaw: Object | undefined = item['stable'];
+        const mv: ModLoaderVersion = {
+          version: item['version'] as string ?? '',
+          stable: stableRaw === true || stableRaw === 'true'
+        };
+        result.push(mv);
+      }
+      return result;
     } catch {
       return [];
     }
@@ -111,7 +142,7 @@ export class FabricInstaller {
       if (libraries) {
         libraries.forEach(lib => {
           const name = lib['name'] as string;
-          const downloads = lib['downloads'] as Record<string, { path: string; url: string; sha1: string }> | undefined;
+          const downloads = lib['downloads'] as Record<string, LibraryFile> | undefined;
 
           if (downloads?.artifact) {
             const art = downloads.artifact;
@@ -278,9 +309,7 @@ export class OptiFineInstaller {
     // 简化: 通过 BMCLAPI 获取
     try {
       const response = await httpGet('https://bmclapi2.bangbang93.com/optifine/versionList');
-      const data = await response.json() as Array<{
-        mcversion: string; type: string; patch: string
-      }>;
+      const data = await response.json() as OptiFineVersion[];
       return data
         .filter(v => v.mcversion === mcVersion)
         .map(v => v.patch);

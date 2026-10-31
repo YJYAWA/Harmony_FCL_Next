@@ -2,7 +2,6 @@
  * 系统架构检测
  * 移植自: FCLauncher/utils/Architecture.java
  */
-import { deviceInfo } from '@kit.BasicServicesKit';
 
 export enum ArchType {
   ARM64 = 'arm64-v8a',

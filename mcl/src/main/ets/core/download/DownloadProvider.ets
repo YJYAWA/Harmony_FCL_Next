@@ -1,9 +1,8 @@
-import { httpGet, httpPost } from '../util/HttpUtils';
+import { httpGet } from '../util/HttpUtils';
 /**
  * 下载提供者接口
  * 移植自: FCLCore/src/main/java/com/tungsten/fclcore/download/DownloadProvider.java
  */
-import { http } from '@kit.NetworkKit';
 
 /** 下载源接口定义 */
 export interface DownloadProvider {
@@ -134,7 +133,10 @@ export class BMCLAPIDownloadProvider implements DownloadProvider {
 
 /** Minecraft 游戏版本列表 */
 class GameVersionList implements VersionList {
-  constructor(private provider: DownloadProvider) {
+  private provider: DownloadProvider;
+
+  constructor(provider: DownloadProvider) {
+    this.provider = provider;
   }
 
   async getVersions(): Promise<RemoteVersion[]> {
@@ -147,12 +149,18 @@ class GameVersionList implements VersionList {
       return [];
     }
 
-    return versions.map(v => ({
-      version: v['id'] ?? '',
-      type: (v['type'] ?? 'release') as VersionType,
-      releaseTime: v['releaseTime'] ?? '',
-      url: v['url'] ?? ''
-    }));
+    const result: RemoteVersion[] = [];
+    for (let i = 0; i < versions.length; i++) {
+      const v = versions[i];
+      const rv: RemoteVersion = {
+        version: v['id'] ?? '',
+        type: (v['type'] ?? 'release') as VersionType,
+        releaseTime: v['releaseTime'] ?? '',
+        url: v['url'] ?? ''
+      };
+      result.push(rv);
+    }
+    return result;
   }
 
   async getVersion(version: string): Promise<RemoteVersion | null> {

@@ -4,8 +4,6 @@
  */
 import { FileUtils } from '../../core/util/FileUtils';
 import { AppContext } from '../../common/AppContext';
-import { LaunchConfig } from '../../core/game/GameTypes';
-import { GameLauncherService } from '../../service/GameLauncherService';
 import { promptAction } from '@kit.ArkUI';
 
 const SERVERS_FILE = 'fcl_servers.json';
