@@ -14,138 +14,20 @@
  * - 手机: 完整触摸覆盖层
  * - 平板: 触摸覆盖层 + 外接键鼠
  * - PC: 纯键鼠模式
+ *
+ * 布局来源: ControlLayoutStore (与 ControlEditor 共用同一份布局数据,
+ * 编辑器保存后游戏内立即生效)
  */
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ControlType, Direction, ButtonConfig, DirectionConfig, TouchpadConfig,
+  ControlLayout, DEFAULT_PHONE_LAYOUT } from '../../core/control/ControlTypes';
+import { ControlLayoutStore } from '../../core/control/ControlLayoutStore';
 import native from 'libfcl_native.so';
 
 const TAG = 'FCL-TouchController';
 
-/** 控件类型 */
-export enum ControlType {
-  BUTTON = 'button',
-  DIRECTION = 'direction',
-  TOUCHPAD = 'touchpad',
-  KEYBOARD_KEY = 'keyboard_key'
-}
-
-/** 按钮配置 */
-export interface ButtonConfig {
-  id: string;
-  type: ControlType;
-  /** 键码 (对应 Minecraft 按键) */
-  keyCode: number;
-  /** 显示文本 */
-  label: string;
-  /** 位置 (百分比, 0-1) */
-  x: number;
-  y: number;
-  /** 大小 (像素) */
-  width: number;
-  height: number;
-  /** 颜色 */
-  color: string;
-  /** 透明度 */
-  opacity: number;
-  /** 是否显示 */
-  visible: boolean;
-  /** 按下状态 */
-  pressed?: boolean;
-}
-
-/** 方向键配置 */
-export interface DirectionConfig {
-  id: string;
-  type: ControlType;
-  /** 位置 */
-  x: number;
-  y: number;
-  /** 大小 */
-  size: number;
-  /** 死区 */
-  deadZone: number;
-  /** 颜色 */
-  color: string;
-  /** 透明度 */
-  opacity: number;
-  /** 是否显示 */
-  visible: boolean;
-  /** 当前方向 */
-  currentDirection?: Direction;
-}
-
-/** 触摸板配置 */
-export interface TouchpadConfig {
-  id: string;
-  type: ControlType;
-  /** 位置 */
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  /** 灵敏度 */
-  sensitivity: number;
-  /** 是否显示 */
-  visible: boolean;
-}
-
-/** 八方向 */
-export enum Direction {
-  NONE = 0,
-  UP = 1,
-  DOWN = 2,
-  LEFT = 4,
-  RIGHT = 8,
-  UP_LEFT = 5,
-  UP_RIGHT = 9,
-  DOWN_LEFT = 6,
-  DOWN_RIGHT = 10
-}
-
-/** 触控布局配置 (可保存/加载) */
-export interface ControlLayout {
-  name: string;
-  version: number;
-  buttons: ButtonConfig[];
-  directions: DirectionConfig[];
-  touchpads: TouchpadConfig[];
-  /** 设备类型 */
-  deviceType: 'phone' | 'tablet' | 'pc';
-}
-
-/**
- * 默认手机布局
- */
-const DEFAULT_PHONE_LAYOUT: ControlLayout = {
-  name: 'Phone Default',
-  version: 1,
-  deviceType: 'phone',
-  buttons: [
-    // 左侧功能键
-    { id: 'btn_shift', type: ControlType.BUTTON, keyCode: 340, label: 'Shift', x: 0.05, y: 0.55, width: 60, height: 40, color: '#FFFFFF', opacity: 0.6, visible: true },
-    // 右侧功能键
-    { id: 'btn_jump', type: ControlType.BUTTON, keyCode: 32, label: 'Jump', x: 0.78, y: 0.75, width: 64, height: 40, color: '#FFFFFF', opacity: 0.6, visible: true },
-    // 物品栏
-    { id: 'btn_slot1', type: ControlType.BUTTON, keyCode: 49, label: '1', x: 0.25, y: 0.92, width: 36, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    { id: 'btn_slot2', type: ControlType.BUTTON, keyCode: 50, label: '2', x: 0.32, y: 0.92, width: 36, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    { id: 'btn_slot3', type: ControlType.BUTTON, keyCode: 51, label: '3', x: 0.39, y: 0.92, width: 36, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    { id: 'btn_slot4', type: ControlType.BUTTON, keyCode: 52, label: '4', x: 0.46, y: 0.92, width: 36, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    { id: 'btn_slot5', type: ControlType.BUTTON, keyCode: 53, label: '5', x: 0.53, y: 0.92, width: 36, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    // 功能键
-    { id: 'btn_inventory', type: ControlType.BUTTON, keyCode: 69, label: 'E', x: 0.88, y: 0.5, width: 40, height: 40, color: '#FFD700', opacity: 0.7, visible: true },
-    { id: 'btn_escape', type: ControlType.BUTTON, keyCode: 27, label: 'Esc', x: 0.92, y: 0.05, width: 40, height: 40, color: '#FF5252', opacity: 0.7, visible: true },
-    { id: 'btn_chat', type: ControlType.BUTTON, keyCode: 84, label: 'T', x: 0.06, y: 0.92, width: 40, height: 36, color: '#CCCCCC', opacity: 0.5, visible: true },
-    { id: 'btn_f5', type: ControlType.BUTTON, keyCode: 292, label: 'F5', x: 0.92, y: 0.15, width: 40, height: 40, color: '#CCCCCC', opacity: 0.5, visible: true }
-  ],
-  directions: [
-    // 左侧方向键
-    { id: 'dir_move', type: ControlType.DIRECTION, x: 0.15, y: 0.72, size: 120, deadZone: 20, color: '#FFFFFF', opacity: 0.5, visible: true }
-  ],
-  touchpads: [
-    // 右侧视角控制
-    { id: 'pad_look', type: ControlType.TOUCHPAD, x: 0.55, y: 0.35, width: 0.4, height: 0.5, sensitivity: 1.0, visible: true }
-  ]
-};
+export { ControlType, Direction, ButtonConfig, DirectionConfig, TouchpadConfig, ControlLayout };
 
 /**
  * 触控覆盖层组件
@@ -177,12 +59,35 @@ export struct TouchController {
     this.loadLayout();
   }
 
+  /**
+   * 加载布局
+   * 优先读取 ControlEditor 保存的当前布局, 没有则回退到默认布局
+   */
   async loadLayout(): Promise<void> {
-    // TODO: 从 Preferences 加载
+    try {
+      const saved = ControlLayoutStore.loadCurrent();
+      if (saved) {
+        this.layout = saved;
+        hilog.info(0x0000, TAG, `Loaded control layout: ${saved.name}`);
+      } else {
+        this.layout = DEFAULT_PHONE_LAYOUT;
+      }
+    } catch (err) {
+      hilog.error(0x0000, TAG, `Failed to load control layout: ${err}`);
+      this.layout = DEFAULT_PHONE_LAYOUT;
+    }
   }
 
+  /**
+   * 保存布局 (游戏内编辑模式保存到与编辑器相同的存储)
+   */
   async saveLayout(): Promise<void> {
-    // TODO: 保存到 Preferences
+    try {
+      ControlLayoutStore.saveCurrent(this.layout);
+      hilog.info(0x0000, TAG, `Saved control layout: ${this.layout.name}`);
+    } catch (err) {
+      hilog.error(0x0000, TAG, `Failed to save control layout: ${err}`);
+    }
   }
 
   build() {

@@ -13,6 +13,10 @@ export interface GameVersion {
   inheritsFrom?: string;
   /** 主类名 */
   mainClass: string;
+  /** 版本自身的下载信息 (客户端 JAR 等) */
+  downloads?: VersionDownloads;
+  /** 客户端 JAR 实际归属的版本 ID (继承型版本指向父版本) */
+  clientJarId?: string;
   /** JVM 参数 */
   arguments: GameArguments;
   /** 依赖库列表 */
@@ -52,6 +56,12 @@ export interface Library {
 export interface LibraryDownloads {
   artifact?: Artifact;
   classifiers?: Record<string, Artifact>;
+}
+
+/** 版本 JSON 的 downloads 段 */
+export interface VersionDownloads {
+  client?: Artifact;
+  server?: Artifact;
 }
 
 export interface Artifact {
@@ -140,6 +150,8 @@ export interface LaunchConfig {
   authUsername: string;
   authUUID: string;
   authAccessToken: string;
+  /** 认证类型: msa (微软) / mojang / legacy */
+  authUserType?: string;
   /** 是否启用演示模式 */
   demo: boolean;
 }

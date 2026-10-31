@@ -6,6 +6,7 @@
 import { request, BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppContext } from '../../common/AppContext';
+import { FileUtils } from '../util/FileUtils';
 
 const TAG = 'FCL-DownloadManager';
 
@@ -18,14 +19,21 @@ export class DownloadTask {
   readonly filePath: string;
   readonly sha1?: string;
   readonly size?: number;
+  /** 可选请求头（BMCLAPI 校验用 x-bmclapi-hash） */
+  readonly headers?: Record<string, string>;
+  /** 备用地址（镜像节点切换） */
+  readonly altUrls?: string[];
   private _progress: number = 0;
   private _status: DownloadStatus = DownloadStatus.PENDING;
 
-  constructor(url: string, filePath: string, sha1?: string, size?: number) {
+  constructor(url: string, filePath: string, sha1?: string, size?: number,
+    headers?: Record<string, string>, altUrls?: string[]) {
     this.url = url;
     this.filePath = filePath;
     this.sha1 = sha1;
     this.size = size;
+    this.headers = headers;
+    this.altUrls = altUrls;
   }
 
   get progress(): number {
@@ -148,19 +156,57 @@ export class DownloadManager {
     }
   }
 
-  /** 下载单个文件 */
+  /** 下载单个文件 (带镜像节点回退) */
   private async downloadSingle(task: DownloadTask): Promise<DownloadResult> {
+    const candidates: string[] = [task.url];
+    if (task.altUrls !== undefined) {
+      for (const alt of task.altUrls) {
+        if (alt.length > 0 && !candidates.includes(alt)) {
+          candidates.push(alt);
+        }
+      }
+    }
+
+    let lastError: string = 'download failed';
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i];
+      const result = await this.downloadFrom(task, url);
+      if (result.success) {
+        // SHA-1 校验（下载完成后）
+        if (task.sha1 !== undefined && task.sha1.length > 0) {
+          const actual = await FileUtils.getFileSHA1(task.filePath);
+          if (actual !== null && actual.toLowerCase() !== task.sha1.toLowerCase()) {
+            hilog.error(0x0000, TAG, `SHA1 mismatch: ${task.filePath}`);
+            return new DownloadResult(false, task, 'SHA-1 mismatch');
+          }
+        }
+        return result;
+      }
+      lastError = result.error ?? lastError;
+      hilog.warn(0x0000, TAG, `Download failed on ${url}, trying next candidate`);
+    }
+
+    task.status = DownloadStatus.FAILED;
+    return new DownloadResult(false, task, lastError);
+  }
+
+  /** 从单个地址下载 */
+  private async downloadFrom(task: DownloadTask, url: string): Promise<DownloadResult> {
     try {
       task.status = DownloadStatus.DOWNLOADING;
-      hilog.info(0x0000, TAG, `Downloading: ${task.url}`);
+      hilog.info(0x0000, TAG, `Downloading: ${url}`);
 
-      const downloadTask = await request.downloadFile(AppContext.context, {
-        url: task.url,
+      const options: request.DownloadConfig = {
+        url: url,
         filePath: task.filePath,
         background: false,
         enableMetered: true,
         enableRoaming: true
-      });
+      };
+      if (task.headers !== undefined) {
+        options.header = task.headers;
+      }
+      const downloadTask = await request.downloadFile(AppContext.context, options);
 
       return new Promise<DownloadResult>((resolve) => {
         downloadTask.on('progress', (receivedSize: number, totalSize: number) => {
@@ -175,20 +221,20 @@ export class DownloadManager {
         downloadTask.on('complete', () => {
           task.status = DownloadStatus.COMPLETED;
           task.progress = 1;
-          hilog.info(0x0000, TAG, `Download complete: ${task.url}`);
+          hilog.info(0x0000, TAG, `Download complete: ${url}`);
           resolve(new DownloadResult(true, task));
         });
 
         downloadTask.on('fail', (err: number) => {
           task.status = DownloadStatus.FAILED;
-          hilog.error(0x0000, TAG, `Download failed: ${task.url}, code=${err}`);
+          hilog.error(0x0000, TAG, `Download failed: ${url}, code=${err}`);
           resolve(new DownloadResult(false, task, `[${err}] download failed`));
         });
       });
     } catch (err) {
       const error = err as BusinessError;
       task.status = DownloadStatus.FAILED;
-      hilog.error(0x0000, TAG, `Download error: ${task.url}, ${error.message}`);
+      hilog.error(0x0000, TAG, `Download error: ${url}, ${error.message}`);
       return new DownloadResult(false, task, error.message);
     }
   }

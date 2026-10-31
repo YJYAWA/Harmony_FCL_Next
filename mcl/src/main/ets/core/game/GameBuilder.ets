@@ -9,6 +9,7 @@ import { Constants } from '../util/Constants';
 import { AppVersion } from '../util/AppVersion';
 import { FileUtils } from '../util/FileUtils';
 import { LibraryAnalyzer } from './LibraryAnalyzer';
+import { LibraryRules } from './LibraryRules';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'FCL-GameBuilder';
@@ -232,22 +233,9 @@ export class GameBuilder {
 
   /** 判断库是否应包含在 classpath 中 */
   static shouldIncludeLibrary(lib: Library): boolean {
-    if (!lib.rules || lib.rules.length === 0) {
-      return true;
-    }
-
-    let allowed = false;
-    for (const rule of lib.rules) {
-      if (rule.os) {
-        // HarmonyOS NEXT: 不是 Windows/Mac/Linux, 需要特殊处理
-        // 暂时允许所有
-        allowed = rule.action === 'allow';
-      } else if (rule.features) {
-        allowed = rule.action === 'allow';
-      }
-    }
-
-    return allowed;
+    // 统一委托 LibraryRules（Mojang rules 顺序求值语义），避免此处与
+    // VersionManager / GameLauncherService 出现两套判定逻辑
+    return LibraryRules.isAllowed(lib);
   }
 
   /** 获取合并后的命令行字符串 (用于显示) */

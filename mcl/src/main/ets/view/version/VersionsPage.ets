@@ -1,11 +1,16 @@
 /**
  * 版本配置/Profile管理页面
  * 移植自: FCL/ui/version/ (VersionListPage, VersionUI, AddProfileDialog, etc.)
+ *
+ * 对齐上游 FCL 1.3.4.x：
+ * - 收藏置顶 (pinned)
+ * - 版本重命名 / 复制 / 删除 (真实生效，非空壳按钮)
  */
 import { VersionManager } from '../../core/game/VersionManager';
 import { BMCLAPIDownloadProvider } from '../../core/download/DownloadProvider';
 import { LibraryAnalyzer } from '../../core/game/LibraryAnalyzer';
 import { LaunchConfig } from '../../core/game/GameTypes';
+import { LaunchConfigFactory } from '../../core/game/LaunchConfigFactory';
 import { FileUtils } from '../../core/util/FileUtils';
 import { SettingsManager } from '../../core/SettingsManager';
 import { GameLauncherService } from '../../service/GameLauncherService';
@@ -24,17 +29,28 @@ interface VersionProfile {
   loaderInfo: string;
 }
 
+/** 已安装版本条目 */
+interface InstalledEntry {
+  id: string;
+  pinned: boolean;
+}
+
+const PINNED_FILE = 'fcl_pinned_versions.json';
+
 @ComponentV2
 export struct VersionsPage {
   @Local profiles: VersionProfile[] = [];
   @Local installedVersions: string[] = [];
+  @Local pinned: string[] = [];
   @Local isLoading: boolean = false;
   @Local showAddDialog: boolean = false;
   @Local showDuplicateDialog: boolean = false;
   @Local showRenameDialog: boolean = false;
+  @Local showVersionMenu: boolean = false;
   @Local selectedVersion: string = '';
   @Local newProfileName: string = '';
   @Local renameTarget: string = '';
+  @Local newVersionName: string = '';
 
   private versionManager: VersionManager = new VersionManager(new BMCLAPIDownloadProvider());
   private settings: SettingsManager = SettingsManager.getInstance();
@@ -42,12 +58,18 @@ export struct VersionsPage {
   aboutToAppear(): void {
     this.loadVersions();
     this.loadProfiles();
+    this.loadPinned();
   }
 
   loadVersions(): void {
     this.isLoading = true;
-    this.installedVersions = this.versionManager.getInstalledVersions()
+    const all = this.versionManager.getInstalledVersions()
       .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    // 收藏置顶的版本排前面
+    this.installedVersions = [
+      ...this.pinned.filter(v => all.includes(v)),
+      ...all.filter(v => !this.pinned.includes(v))
+    ];
     this.isLoading = false;
   }
 
@@ -59,6 +81,32 @@ export struct VersionsPage {
   saveProfiles(): void {
     const path = `${FileUtils.getMinecraftDir()}/fcl_profiles.json`;
     FileUtils.writeJSON(path, this.profiles);
+  }
+
+  loadPinned(): void {
+    const path = `${FileUtils.getMinecraftDir()}/${PINNED_FILE}`;
+    const data = FileUtils.readJSON<InstalledEntry[]>(path);
+    this.pinned = (data ?? []).filter(e => e.pinned).map(e => e.id);
+  }
+
+  savePinned(): void {
+    const path = `${FileUtils.getMinecraftDir()}/${PINNED_FILE}`;
+    const entries: InstalledEntry[] = [];
+    for (const id of this.pinned) {
+      const entry: InstalledEntry = { id: id, pinned: true };
+      entries.push(entry);
+    }
+    FileUtils.writeJSON(path, entries);
+  }
+
+  togglePin(versionId: string): void {
+    if (this.pinned.includes(versionId)) {
+      this.pinned = this.pinned.filter(v => v !== versionId);
+    } else {
+      this.pinned = [versionId, ...this.pinned];
+    }
+    this.savePinned();
+    this.loadVersions();
   }
 
   build() {
@@ -122,6 +170,9 @@ export struct VersionsPage {
       if (this.showRenameDialog) {
         this.buildRenameDialog();
       }
+      if (this.showVersionMenu) {
+        this.buildVersionMenuDialog();
+      }
     }
   }
 
@@ -157,7 +208,12 @@ export struct VersionsPage {
   buildVersionCard(versionId: string) {
     Row() {
       Column() {
-        Text(versionId).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#FFFFFF')
+        Row() {
+          if (this.pinned.includes(versionId)) {
+            Text('★').fontSize(14).fontColor('#FFD700').margin({ right: 6 })
+          }
+          Text(versionId).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#FFFFFF')
+        }
         Text('Installed').fontSize(12).fontColor('#4CAF50').margin({ top: 2 })
       }
       .alignItems(HorizontalAlign.Start).layoutWeight(1)
@@ -172,7 +228,10 @@ export struct VersionsPage {
 
       Button('More').fontSize(12).fontColor('#999999').backgroundColor('rgba(255,255,255,0.05)')
         .borderRadius(6).padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .onClick(() => { this.selectedVersion = versionId; })
+        .onClick(() => {
+          this.selectedVersion = versionId;
+          this.showVersionMenu = true;
+        })
     }
     .width('100%').padding(12).backgroundColor('#16213E').borderRadius(8)
     .margin({ top: 4, left: 16, right: 16 })
@@ -230,13 +289,75 @@ export struct VersionsPage {
     .onClick(() => { this.showAddDialog = false; })
   }
 
+  /** 版本操作菜单（重命名 / 复制 / 收藏 / 删除） */
+  @Builder
+  buildVersionMenuDialog() {
+    Column() {
+      Column() {
+        Text(this.selectedVersion)
+          .fontSize(18).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').margin({ bottom: 16 })
+
+        Button(this.pinned.includes(this.selectedVersion) ? '★ Unpin' : '☆ Pin to top')
+          .fontSize(14).fontColor('#FFFFFF').backgroundColor('#0F3460')
+          .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).width('100%')
+          .margin({ bottom: 8 })
+          .onClick(() => {
+            this.togglePin(this.selectedVersion);
+            this.showVersionMenu = false;
+          })
+
+        Button('Rename')
+          .fontSize(14).fontColor('#FFFFFF').backgroundColor('#0F3460')
+          .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).width('100%')
+          .margin({ bottom: 8 })
+          .onClick(() => {
+            this.renameTarget = this.selectedVersion;
+            this.showVersionMenu = false;
+            this.showRenameDialog = true;
+          })
+
+        Button('Duplicate')
+          .fontSize(14).fontColor('#FFFFFF').backgroundColor('#0F3460')
+          .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).width('100%')
+          .margin({ bottom: 8 })
+          .onClick(() => {
+            this.newVersionName = `${this.selectedVersion}_copy`;
+            this.showVersionMenu = false;
+            this.showDuplicateDialog = true;
+          })
+
+        Button('Delete')
+          .fontSize(14).fontColor('#FF5252').backgroundColor('rgba(255,82,82,0.15)')
+          .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).width('100%')
+          .margin({ bottom: 8 })
+          .onClick(() => {
+            this.deleteVersion(this.selectedVersion);
+            this.showVersionMenu = false;
+          })
+
+        Button('Close')
+          .fontSize(14).fontColor('#999999').backgroundColor('rgba(255,255,255,0.05)')
+          .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).width('100%')
+          .onClick(() => { this.showVersionMenu = false; })
+      }
+      .padding(24).backgroundColor('#16213E').borderRadius(16).width('80%')
+    }
+    .width('100%').height('100%').justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center).backgroundColor('rgba(0,0,0,0.7)')
+    .onClick(() => { this.showVersionMenu = false; })
+  }
+
   @Builder
   buildDuplicateDialog() {
     Column() {
       Column() {
         Text('Duplicate Version').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').margin({ bottom: 12 })
         Text(`Create a copy of "${this.selectedVersion}"?`)
-          .fontSize(14).fontColor('#CCCCCC').margin({ bottom: 16 })
+          .fontSize(14).fontColor('#CCCCCC').margin({ bottom: 12 })
+        TextInput({ placeholder: 'New version id', text: this.newVersionName })
+          .fontSize(14).fontColor('#FFFFFF')
+          .backgroundColor('#0F3460').borderRadius(8).padding(12).width('100%').margin({ bottom: 16 })
+          .onChange((v: string) => { this.newVersionName = v; })
         Row() {
           Button('Cancel').fontSize(14).fontColor('#999999').backgroundColor('#0F3460')
             .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 })
@@ -244,9 +365,8 @@ export struct VersionsPage {
           Button('Duplicate').fontSize(14).fontColor('#FFFFFF').backgroundColor('#E94560')
             .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).margin({ left: 16 })
             .onClick(() => {
-              const src = `${FileUtils.getVersionsDir()}/${this.selectedVersion}`;
-              const dst = `${FileUtils.getVersionsDir()}/${this.selectedVersion}_copy`;
-              FileUtils.copy(src + '/' + this.selectedVersion + '.json', dst + '/' + this.selectedVersion + '_copy' + '.json');
+              const ok = this.versionManager.duplicateVersion(this.selectedVersion, this.newVersionName);
+              promptAction.showToast({ message: ok ? 'Version duplicated' : 'Duplicate failed' });
               this.showDuplicateDialog = false;
               this.loadVersions();
             })
@@ -273,7 +393,12 @@ export struct VersionsPage {
             .onClick(() => { this.showRenameDialog = false; })
           Button('Rename').fontSize(14).fontColor('#FFFFFF').backgroundColor('#E94560')
             .borderRadius(8).padding({ left: 20, right: 20, top: 10, bottom: 10 }).margin({ left: 16 })
-            .onClick(() => { this.showRenameDialog = false; })
+            .onClick(() => {
+              const ok = this.versionManager.renameVersion(this.selectedVersion, this.renameTarget);
+              promptAction.showToast({ message: ok ? 'Version renamed' : 'Rename failed' });
+              this.showRenameDialog = false;
+              this.loadVersions();
+            })
         }
       }
       .padding(24).backgroundColor('#16213E').borderRadius(16).width('80%')
@@ -283,17 +408,17 @@ export struct VersionsPage {
     .onClick(() => { this.showRenameDialog = false; })
   }
 
-  launchVersion(versionId: string): void {
-    const config: LaunchConfig = {
-      version: versionId, gameDir: FileUtils.getMinecraftDir(),
-      javaPath: this.settings.settings.javaPath || 'java',
-      minMemory: this.settings.settings.minMemory, maxMemory: this.settings.settings.maxMemory,
-      extraJVMArgs: this.settings.settings.extraJVMArgs.split(' ').filter((a: string): boolean => a.length > 0),
-      windowWidth: this.settings.settings.windowWidth, windowHeight: this.settings.settings.windowHeight,
-      fullscreen: this.settings.settings.fullscreen,
-      authUsername: 'Player', authUUID: '00000000-0000-0000-0000-000000000000',
-      authAccessToken: 'offline', demo: false
-    };
+  deleteVersion(versionId: string): void {
+    if (this.versionManager.deleteVersion(versionId)) {
+      this.pinned = this.pinned.filter(v => v !== versionId);
+      this.savePinned();
+      this.loadVersions();
+      promptAction.showToast({ message: 'Version deleted' });
+    }
+  }
+
+  async launchVersion(versionId: string): Promise<void> {
+    const config: LaunchConfig = await LaunchConfigFactory.create(versionId);
     GameLauncherService.getInstance().launchGame(config).then(r => {
       promptAction.showToast({ message: r.success ? 'Game started!' : `Failed: ${r.error}` });
     });

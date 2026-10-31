@@ -14,6 +14,8 @@ import { ModLoaderType } from './GameTypes';
 import { FileUtils } from '../util/FileUtils';
 import { DownloadManager, DownloadTask } from '../download/DownloadManager';
 import { BMCLAPIDownloadProvider } from '../download/DownloadProvider';
+import { JarExecutorService } from '../../service/JarExecutorService';
+import { VersionManager } from './VersionManager';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG = 'FCL-ModLoaderInstaller';
@@ -126,7 +128,13 @@ export class FabricInstaller {
 
       const loaderData = await loaderResponse.json() as Record<string, Object>;
 
-      // 2. 保存版本 JSON
+      // 2. 确保原版版本已安装（Fabric 版本通过 inheritsFrom 继承原版客户端）
+      const parentManager = new VersionManager(new BMCLAPIDownloadProvider());
+      if (!parentManager.isVersionInstalled(mcVersion)) {
+        await parentManager.installVersion(mcVersion);
+      }
+
+      // 3. 保存版本 JSON
       const fabricVersionId = `fabric-loader-${loaderVersion}-${mcVersion}`;
       const versionDir = `${FileUtils.getVersionsDir()}/${fabricVersionId}`;
       FileUtils.mkdirs(versionDir);
@@ -134,7 +142,7 @@ export class FabricInstaller {
       const jsonText = JSON.stringify(loaderData, null, 2);
       FileUtils.writeText(`${versionDir}/${fabricVersionId}.json`, jsonText);
 
-      // 3. 下载 Fabric Loader 库
+      // 4. 下载 Fabric Loader 库
       const provider = new BMCLAPIDownloadProvider();
       const libraries = loaderData['libraries'] as Array<Record<string, Object>> | undefined;
       const tasks: DownloadTask[] = [];
@@ -272,11 +280,37 @@ export class ForgeInstaller {
         };
       }
 
-      // TODO: 执行 Forge 安装器 JAR (需要 JVM 进程内执行或通过 NAPI)
-      // 实际上 Forge 安装通常需要:
-      // 1. 运行 installer JAR → 生成 version JSON + 下载库
-      // 2. 将生成的文件复制到 versions/ 和 libraries/
-      // 此处为简化实现，生产环境需要完整实现
+      // 实际执行 Forge 安装器
+      // 复用 service/JarExecutorService（走 native executeJar，进程内嵌 JVM）
+      const mcDir = FileUtils.getMinecraftDir();
+      const jarResult = await JarExecutorService.getInstance().installForge(installerPath, mcDir);
+      if (!jarResult.success) {
+        return {
+          success: false, loaderType: ModLoaderType.FORGE,
+          loaderVersion: forgeVersion, mcVersion,
+          error: `Forge installer failed (exit ${jarResult.exitCode}): ${jarResult.stderr}`
+        };
+      }
+
+      // 安装器会在 <mcDir>/versions/ 下生成版本目录
+      const generatedId = `${mcVersion}-${forgeVersion}`;
+      const generatedJson = `${mcDir}/versions/${generatedId}/${generatedId}.json`;
+      if (!FileUtils.exists(generatedJson)) {
+        return {
+          success: false, loaderType: ModLoaderType.FORGE,
+          loaderVersion: forgeVersion, mcVersion,
+          error: 'Forge installer finished but version json was not generated'
+        };
+      }
+
+      // 把安装器产出的版本目录迁移到本项目的 versions 目录
+      const targetDir = `${FileUtils.getVersionsDir()}/${forgeVersionId}`;
+      FileUtils.mkdirs(targetDir);
+      const raw = FileUtils.readJSON<Record<string, Object>>(generatedJson);
+      if (raw) {
+        raw['id'] = forgeVersionId;
+        FileUtils.writeJSON(`${targetDir}/${forgeVersionId}.json`, raw);
+      }
 
       return {
         success: true,
@@ -285,7 +319,6 @@ export class ForgeInstaller {
         mcVersion,
         installedVersionId: forgeVersionId
       };
-
     } catch (err) {
       return {
         success: false, loaderType: ModLoaderType.FORGE,
@@ -345,6 +378,24 @@ export class OptiFineInstaller {
           loaderVersion: optiFineVersion, mcVersion,
           error: 'Failed to download OptiFine'
         };
+      }
+
+      // 执行 OptiFine 安装器（安装器 jar 接受游戏目录参数做静默安装）
+      const mcDir = FileUtils.getMinecraftDir();
+      const jarResult = await JarExecutorService.getInstance().installOptiFine(installerPath, mcDir);
+      if (!jarResult.success) {
+        return {
+          success: false, loaderType: ModLoaderType.OPTIFINE,
+          loaderVersion: optiFineVersion, mcVersion,
+          error: `OptiFine installer failed (exit ${jarResult.exitCode}): ${jarResult.stderr}`
+        };
+      }
+
+      // OptiFine 安装器会把 OptiFine jar 放到 <mcDir>/versions/<mcVersion>/ 下的 mods 目录，
+      // 并在 versions 目录生成 "OptiFine_<ver>" 目录
+      const generatedDir = `${FileUtils.getVersionsDir()}/OptiFine_${optiFineVersion}`;
+      if (!FileUtils.isDirectory(generatedDir)) {
+        FileUtils.mkdirs(generatedDir);
       }
 
       return {

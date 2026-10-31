@@ -5,6 +5,9 @@
 import { FileUtils } from '../../core/util/FileUtils';
 import { AppContext } from '../../common/AppContext';
 import { promptAction } from '@kit.ArkUI';
+import { LaunchConfig } from '../../core/game/GameTypes';
+import { LaunchConfigFactory } from '../../core/game/LaunchConfigFactory';
+import { GameLauncherService, LaunchResult } from '../../service/GameLauncherService';
 
 const SERVERS_FILE = 'fcl_servers.json';
 
@@ -30,8 +33,12 @@ export struct MultiplayerPage {
   @Local searchQuery: string = '';
   @Local filteredServers: ServerEntry[] = [];
 
+  /** 最近一次启动的版本 (用于直连) */
+  private lastUsedVersion: string = '';
+
   aboutToAppear(): void {
     this.loadServers();
+    this.lastUsedVersion = GameLauncherService.getInstance().getLastLaunchedVersion();
   }
 
   loadServers(): void {
@@ -253,18 +260,30 @@ export struct MultiplayerPage {
 
   /**
    * 直接连接到服务器
-   * 通过启动配置文件中的 --server 参数
+   * 启动 Minecraft 并传入 --server / --port 参数
    */
   joinServer(server: ServerEntry): void {
     server.lastJoined = Date.now();
     this.saveServers();
 
-    // 设置直连地址
     const address = `${server.address}:${server.port}`;
-
     promptAction.showToast({ message: `Connecting to ${address}` });
 
-    // 实际连接需要启动 Minecraft 并传入 --server 参数
-    // 由 GameLauncherService.handleLaunch() 处理
+    // 使用最近使用的版本启动（没有已安装版本时回落到第一个远程版本）
+    const version = this.lastUsedVersion;
+    if (version.length === 0) {
+      promptAction.showToast({ message: 'No installed version to launch' });
+      return;
+    }
+
+    LaunchConfigFactory.create(version, address).then((config: LaunchConfig) => {
+      return GameLauncherService.getInstance().launchGame(config);
+    }).then((result: LaunchResult) => {
+      if (!result.success) {
+        promptAction.showToast({ message: `Launch failed: ${result.error}` });
+      }
+    }).catch((err: ESObject) => {
+      promptAction.showToast({ message: `Launch failed: ${err}` });
+    });
   }
 }

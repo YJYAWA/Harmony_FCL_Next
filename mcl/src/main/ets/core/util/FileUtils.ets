@@ -107,6 +107,20 @@ export class FileUtils {
     }
   }
 
+  /** 读取二进制文件 (返回字节数组) */
+  static readBinary(path: string): Uint8Array | null {
+    try {
+      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      const stat = fs.statSync(path);
+      const buffer = new ArrayBuffer(stat.size);
+      fs.readSync(file.fd, buffer);
+      fs.closeSync(file);
+      return new Uint8Array(buffer);
+    } catch {
+      return null;
+    }
+  }
+
   /** 读取 JSON 文件 */
   static readJSON<T>(path: string): T | null {
     try {
@@ -180,6 +194,58 @@ export class FileUtils {
     }
   }
 
+  /** 递归复制目录 */
+  static copyDir(source: string, dest: string): boolean {
+    try {
+      if (!FileUtils.exists(source)) {
+        return false;
+      }
+      if (!FileUtils.exists(dest)) {
+        FileUtils.mkdirs(dest);
+      }
+      const files = fs.listFileSync(source);
+      for (const file of files) {
+        const srcPath = `${source}/${file}`;
+        const dstPath = `${dest}/${file}`;
+        if (FileUtils.isDirectory(srcPath)) {
+          FileUtils.copyDir(srcPath, dstPath);
+        } else {
+          fs.copyFileSync(srcPath, dstPath);
+        }
+      }
+      return true;
+    } catch (err) {
+      const error = err as BusinessError;
+      hilog.error(0x0000, TAG, `Failed to copy dir: ${source} -> ${dest}, ${error.message}`);
+      return false;
+    }
+  }
+
+  /** 重命名 (文件或目录) */
+  static rename(source: string, dest: string): boolean {
+    try {
+      if (!FileUtils.exists(source)) {
+        return false;
+      }
+      fs.renameSync(source, dest);
+      return true;
+    } catch (err) {
+      const error = err as BusinessError;
+      hilog.error(0x0000, TAG, `Failed to rename: ${source} -> ${dest}, ${error.message}`);
+      return false;
+    }
+  }
+
+  /** 读取文件最后修改时间 (毫秒) */
+  static getLastModified(path: string): number {
+    try {
+      const stat = fs.statSync(path);
+      return stat.mtime ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** 列出目录内容 */
   static listFiles(path: string): string[] {
     try {
@@ -235,23 +301,21 @@ export class FileUtils {
     return dir;
   }
 
-  /** 获取文件 SHA1 校验值 */
+  /** 获取文件 SHA1 校验值 (二进制安全) */
   static async getFileSHA1(path: string): Promise<string | null> {
     try {
-      const content = FileUtils.readText(path);
-      if (!content) {
+      const bytes = FileUtils.readBinary(path);
+      if (!bytes) {
         return null;
       }
-      const encoder = new util.TextEncoder();
-      const data = encoder.encodeInto(content);
       const md = cryptoFramework.createMd('SHA-1');
-      const blob: cryptoFramework.DataBlob = { data: data };
+      const blob: cryptoFramework.DataBlob = { data: bytes };
       await md.update(blob);
       const digest = await md.digest();
-      const bytes = digest.data;
+      const hashBytes = digest.data;
       let hex = '';
-      for (let i = 0; i < bytes.length; i++) {
-        hex += ('0' + bytes[i].toString(16)).slice(-2);
+      for (let i = 0; i < hashBytes.length; i++) {
+        hex += ('0' + hashBytes[i].toString(16)).slice(-2);
       }
       return hex;
     } catch {

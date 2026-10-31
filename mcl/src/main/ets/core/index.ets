@@ -8,10 +8,12 @@ export { OfflineAccount } from './auth/OfflineAccount';
 export { MicrosoftAccount } from './auth/MicrosoftAccount';
 export { YggdrasilAccount, YggdrasilServers } from './auth/YggdrasilAccount';
 export { AccountFactory } from './auth/AccountFactory';
+export { AccountService, LaunchAuth } from './auth/AccountService';
 
 // ── 下载 ──
 export { DownloadProvider, MojangDownloadProvider, BMCLAPIDownloadProvider } from './download/DownloadProvider';
 export { DownloadTask, DownloadStatus, DownloadResult, DownloadManager } from './download/DownloadManager';
+export { SourceProber, BMCLAPI_NODES, getOrderedMirrors } from './download/SourceProber';
 
 // ── 游戏 ──
 export { GameVersion, LaunchConfig, GameProcessState, ModLoaderType } from './game/GameTypes';
@@ -20,6 +22,15 @@ export { ResourceManager, ModpackManager, ManagedItemType } from './game/ModMana
 export { FabricInstaller, ForgeInstaller, OptiFineInstaller } from './game/ModLoaderInstaller';
 export { LibraryAnalyzer } from './game/LibraryAnalyzer';
 export { GameBuilder } from './game/GameBuilder';
+export { LibraryRules, HARMONY_PLATFORM } from './game/LibraryRules';
+export { VersionArguments } from './game/VersionArguments';
+export { LaunchConfigFactory } from './game/LaunchConfigFactory';
+export { parseMavenName, compareMavenVersions } from './game/MavenCoords';
+
+// ── 触控布局 ──
+export { ControlType, ControlLayout, ButtonConfig, DirectionConfig, TouchpadConfig,
+  DEFAULT_PHONE_LAYOUT } from './control/ControlTypes';
+export { ControlLayoutStore, LayoutEntry } from './control/ControlLayoutStore';
 
 // ── 设置 ──
 export { SettingsManager, Theme, DownloadSource } from './SettingsManager';

@@ -30,15 +30,23 @@ class FetchResponse {
 
 /**
  * fetch 替代 — GET 请求
+ * @param url 请求地址
+ * @param headers 可选请求头（如 BMCLAPI 的 x-bmclapi-hash 校验头）
+ * @param timeoutMs 超时（毫秒），默认 15s
  */
-export async function httpGet(url: string): Promise<FetchResponse> {
+export async function httpGet(url: string, headers?: Record<string, string>,
+  timeoutMs: number = 15000): Promise<FetchResponse> {
   const req = http.createHttp();
   try {
-    const resp = await req.request(url, {
+    const options: http.HttpRequestOptions = {
       method: http.RequestMethod.GET,
-      connectTimeout: 15000,
-      readTimeout: 30000
-    });
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs
+    };
+    if (headers !== undefined) {
+      options.header = headers;
+    }
+    const resp = await req.request(url, options);
     return new FetchResponse(resp.result as string ?? '', resp.responseCode);
   } finally {
     req.destroy();

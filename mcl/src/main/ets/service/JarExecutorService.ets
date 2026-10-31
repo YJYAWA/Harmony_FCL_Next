@@ -86,8 +86,8 @@ export class JarExecutorService {
 
       // Java 运行时（<jdk>/bin/java 形式）
       const settings = SettingsManager.getInstance();
-      const javaPath = config.javaPath ?? settings.get('javaPath') ?? '';
-      const maxMem = config.maxMemory ?? 1024;
+      const javaPath: string = config.javaPath ?? settings.settings.javaPath ?? '';
+      const maxMem: number = config.maxMemory ?? 1024;
 
       if (!javaPath || !FileUtils.exists(javaPath)) {
         throw new Error('Java runtime not found. Please download JDK first.');

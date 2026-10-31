@@ -9,6 +9,7 @@ import { GameLauncherService, LaunchResult } from '../../service/GameLauncherSer
 import { SettingsManager } from '../../core/SettingsManager';
 import { FileUtils } from '../../core/util/FileUtils';
 import { LaunchConfig } from '../../core/game/GameTypes';
+import { LaunchConfigFactory } from '../../core/game/LaunchConfigFactory';
 import { NavigationService, RouteNames } from '../../common/NavigationRouter';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -319,27 +320,7 @@ export struct MainPage {
     this.launchProgress = `Launching ${version}...`;
     this.showLaunchDialog = true;
 
-    const gameDir = FileUtils.getMinecraftDir();
-    const javaPath = this.settings.settings.javaPath || 'java';
-    const minMemory = this.settings.settings.minMemory;
-    const maxMemory = this.settings.settings.maxMemory;
-    const extraJVMArgs = this.settings.settings.extraJVMArgs.split(' ').filter((a: string): boolean => a.length > 0);
-
-    const config: LaunchConfig = {
-      version,
-      gameDir,
-      javaPath,
-      minMemory,
-      maxMemory,
-      extraJVMArgs,
-      windowWidth: this.settings.settings.windowWidth,
-      windowHeight: this.settings.settings.windowHeight,
-      fullscreen: this.settings.settings.fullscreen,
-      authUsername: 'Player',
-      authUUID: '00000000-0000-0000-0000-000000000000',
-      authAccessToken: 'offline',
-      demo: false
-    };
+    const config: LaunchConfig = await LaunchConfigFactory.create(version);
 
     // launchGame 的 Promise 在游戏 main() 返回后才 resolve（native 侧阻塞），
     // 因此这里不 await：立即导航到游戏页面，退出码由后台任务消费。

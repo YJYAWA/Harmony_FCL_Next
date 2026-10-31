@@ -32,3 +32,6 @@ oh-package-lock.json5
 
 # Runtime zips (download from mc-ohos-resources, not distributed)
 runtime/
+
+# Release artifacts (unsigned HAP is uploaded to Releases manually)
+dist/

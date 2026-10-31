@@ -3,7 +3,7 @@
  * 负责 JVM 进程管理和游戏启动参数构建
  *
  * 核心职责:
- * 1. 构建 Minecraft 启动命令行
+ * 1. 构建 Minecraft 启动命令行 (按版本 JSON 的 arguments/libraries)
  * 2. 通过 NAPI 启动 OpenJDK/JVM 进程
  * 3. 监控游戏进程状态
  * 4. 处理游戏日志输出
@@ -15,11 +15,15 @@
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { LaunchConfig, GameProcessState } from '../core/game/GameTypes';
+import { LaunchConfig, GameProcessState, GameVersion, Library, LibraryDownloads,
+  LibraryRule, VersionType, AssetIndex, JavaVersion, VersionDownloads } from '../core/game/GameTypes';
 import { FileUtils } from '../core/util/FileUtils';
 import { Constants } from '../core/util/Constants';
 import { SettingsManager } from '../core/SettingsManager';
 import { FmlConfigPatcher } from '../core/game/FmlConfigPatcher';
+import { LibraryRules } from '../core/game/LibraryRules';
+import { VersionArguments } from '../core/game/VersionArguments';
+import { AppVersion } from '../core/util/AppVersion';
 import { AppContext } from '../common/AppContext';
 import native from 'libfcl_native.so';
 
@@ -84,15 +88,21 @@ export class GameLauncherService {
 
   /**
    * 构建 Minecraft 启动命令行
-   * 对应 FCLauncher 的启动参数组装逻辑
+   *
+   * 对应 FCLauncher 的启动参数组装逻辑：
+   * java <JVM 参数> -cp <classpath> <mainClass> <游戏参数>
+   *
+   * @param config 启动配置
+   * @param version 已解析（含继承链合并）的版本信息
    */
-  buildLaunchCommand(config: LaunchConfig): string[] {
+  buildLaunchCommand(config: LaunchConfig, version: GameVersion): string[] {
     const args: string[] = [];
+    const mcDir = config.gameDir;
 
-    // Java 可执行文件路径
+    // 1. Java 可执行文件路径
     args.push(config.javaPath);
 
-    // JVM 参数
+    // 2. JVM 参数
     // 内存设置
     args.push(`-Xms${config.minMemory}M`);
     args.push(`-Xmx${config.maxMemory}M`);
@@ -104,103 +114,186 @@ export class GameLauncherService {
     // 默认 GC 参数
     Constants.DEFAULT_JVM_ARGS.forEach(arg => args.push(arg));
 
-    // 额外 JVM 参数
+    // 3. 版本 JSON 中声明的 JVM 参数 (arguments.jvm)
+    //    过滤掉 -cp / -Djava.library.path / -XstartOnFirstThread (由启动器自行管理)
+    const placeholders = this.buildPlaceholders(config, version, mcDir);
+    const versionJvmArgs = VersionArguments.filterJvmArgs(version.arguments?.jvm ?? []);
+    for (const raw of versionJvmArgs) {
+      args.push(VersionArguments.expand(raw, placeholders));
+    }
+
+    // 4. Minecraft 启动器标识 (出现在崩溃报告中)
+    args.push(`-Dminecraft.launcher.brand=${AppVersion.BRAND}`);
+    args.push(`-Dminecraft.launcher.version=${AppVersion.VERSION_NAME}`);
+
+    // 5. 额外 JVM 参数 (用户设置)
     config.extraJVMArgs.forEach(arg => {
       if (arg.trim().length > 0) {
         args.push(arg);
       }
     });
 
-    // 库路径
-    const nativesDir = `${config.gameDir}/natives`;
+    // 6. 原生库路径
+    const nativesDir = `${mcDir}/natives`;
     args.push(`-Djava.library.path=${nativesDir}`);
 
-    // Minecraft 客户端参数
-    const classpath = this.buildClasspath(config);
+    // 7. classpath (按版本 libraries 构建)
     args.push('-cp');
-    args.push(classpath);
+    args.push(this.buildClasspath(config, version));
 
-    // 主类
-    args.push(this.getMainClass(config));
+    // 8. 主类
+    args.push(this.getMainClass(config, version));
 
-    // 游戏参数
-    args.push(`--username`);
-    args.push(config.authUsername);
-    args.push(`--uuid`);
-    args.push(config.authUUID);
-    args.push(`--accessToken`);
-    args.push(config.authAccessToken);
-    args.push(`--version`);
-    args.push(config.version);
-    args.push(`--gameDir`);
-    args.push(config.gameDir);
-    args.push(`--assetsDir`);
-    args.push(`${config.gameDir}/assets`);
-
-    if (config.serverAddress) {
-      args.push(`--server`);
-      args.push(config.serverAddress);
+    // 9. 游戏参数
+    for (const gameArg of this.buildGameArgs(config, version, mcDir, placeholders)) {
+      args.push(gameArg);
     }
-
-    if (config.demo) {
-      args.push('--demo');
-    }
-
-    if (config.fullscreen) {
-      args.push('--fullscreen');
-    }
-
-    args.push(`--width`);
-    args.push(config.windowWidth.toString());
-    args.push(`--height`);
-    args.push(config.windowHeight.toString());
 
     return args;
   }
 
   /**
-   * 构建 classpath
+   * 构建启动参数占位符表
    */
-  private buildClasspath(config: LaunchConfig): string {
-    const librariesDir = `${config.gameDir}/libraries`;
-    const versionJar = `${config.gameDir}/versions/${config.version}/${config.version}.jar`;
+  private buildPlaceholders(config: LaunchConfig, version: GameVersion, mcDir: string):
+    Map<string, string> {
+    const map: Map<string, string> = new Map();
+    map.set('auth_player_name', config.authUsername);
+    map.set('auth_uuid', config.authUUID);
+    map.set('auth_access_token', config.authAccessToken);
+    map.set('auth_session', `${config.authAccessToken}:${config.authUUID}`);
+    map.set('auth_xuid', '');
+    map.set('clientid', '');
+    map.set('version_name', config.version);
+    map.set('game_directory', mcDir);
+    map.set('assets_root', `${mcDir}/assets`);
+    map.set('game_assets', `${mcDir}/assets/virtual/legacy`);
+    map.set('assets_index_name', version.assetIndex?.id ?? config.version);
+    map.set('version_type', version.type ?? 'release');
+    map.set('user_type', config.authUserType ?? 'msa');
+    map.set('user_properties', '{}');
+    map.set('resolution_width', config.windowWidth.toString());
+    map.set('resolution_height', config.windowHeight.toString());
+    map.set('natives_directory', `${mcDir}/natives`);
+    map.set('classpath', this.buildClasspath(config, version));
+    map.set('launcher_name', AppVersion.BRAND);
+    map.set('launcher_version', AppVersion.VERSION_NAME);
+    map.set('library_directory', `${mcDir}/libraries`);
+    map.set('authlib_injector_path', '');
+    return map;
+  }
 
-    const parts: string[] = [versionJar];
+  /**
+   * 构建 classpath
+   *
+   * 严格按版本 JSON 的 libraries 列表构建 (不再扫描整个 libraries 目录,
+   * 否则会混入其它版本的库并导致启动失败)
+   */
+  private buildClasspath(config: LaunchConfig, version: GameVersion): string {
+    const parts: string[] = [];
 
-    // 收集所有依赖 jar
-    if (FileUtils.exists(librariesDir)) {
-      this.collectJars(librariesDir, parts);
+    // 客户端 JAR (继承型版本指向父版本目录)
+    const ownerId = version.clientJarId ?? config.version;
+    const versionJar = `${config.gameDir}/versions/${ownerId}/${ownerId}.jar`;
+    if (FileUtils.exists(versionJar)) {
+      parts.push(versionJar);
+    } else {
+      // 回退: 版本自身目录
+      const fallback = `${config.gameDir}/versions/${config.version}/${config.version}.jar`;
+      if (FileUtils.exists(fallback)) {
+        parts.push(fallback);
+      }
+    }
+
+    // 依赖库
+    for (const lib of version.libraries ?? []) {
+      if (!LibraryRules.isAllowed(lib)) {
+        continue;
+      }
+      const path = this.libraryFilePath(lib, config.gameDir);
+      if (path.length > 0 && FileUtils.exists(path)) {
+        parts.push(path);
+      }
     }
 
     return parts.join(':');
   }
 
-  /** 递归收集所有 .jar 文件 */
-  private collectJars(dir: string, result: string[]): void {
-    try {
-      const files = FileUtils.listFiles(dir);
-      files.forEach(file => {
-        const fullPath = `${dir}/${file}`;
-        if (FileUtils.isDirectory(fullPath)) {
-          this.collectJars(fullPath, result);
-        } else if (file.endsWith('.jar')) {
-          result.push(fullPath);
-        }
-      });
-    } catch {
-      // 忽略收集错误
+  /**
+   * 计算库文件的绝对路径
+   */
+  private libraryFilePath(lib: Library, mcDir: string): string {
+    const artifact = lib.downloads?.artifact;
+    if (artifact && artifact.path.length > 0) {
+      return `${mcDir}/libraries/${artifact.path}`;
     }
+    // 回退: 由 Maven 坐标推导
+    const derived = LibraryRules.libraryPath(lib.name);
+    return derived.length > 0 ? `${mcDir}/libraries/${derived}` : '';
   }
 
-  /** 获取主类名 */
-  private getMainClass(config: LaunchConfig): string {
-    // 从版本 JSON 中读取主类
-    const versionJSON = FileUtils.readJSON<Record<string, Object>>(
-      `${config.gameDir}/versions/${config.version}/${config.version}.json`
-    );
-    if (versionJSON && versionJSON['mainClass']) {
-      return versionJSON['mainClass'] as string;
+  /**
+   * 构建游戏参数 (传给 Minecraft 主类)
+   *
+   * 优先使用版本 JSON 的 arguments.game (含条件对象求值),
+   * 老版本 (无 arguments.game) 走手工参数
+   */
+  private buildGameArgs(config: LaunchConfig, version: GameVersion, mcDir: string,
+    placeholders: Map<string, string>): string[] {
+    const args: string[] = [];
+
+    const versionGameArgs = version.arguments?.game ?? [];
+    if (versionGameArgs.length > 0) {
+      for (const raw of versionGameArgs) {
+        args.push(VersionArguments.expand(raw, placeholders));
+      }
+    } else {
+      // 老版本参数格式
+      args.push('--username', config.authUsername);
+      args.push('--version', config.version);
+      args.push('--gameDir', mcDir);
+      args.push('--assetsDir', `${mcDir}/assets`);
+      args.push('--assetIndex', version.assetIndex?.id ?? config.version);
+      args.push('--uuid', config.authUUID);
+      args.push('--accessToken', config.authAccessToken);
+      args.push('--userType', config.authUserType ?? 'msa');
+      args.push('--versionType', version.type ?? 'release');
     }
+
+    // 全屏
+    if (config.fullscreen) {
+      args.push('--fullscreen');
+    } else {
+      args.push('--width', config.windowWidth.toString());
+      args.push('--height', config.windowHeight.toString());
+    }
+
+    // 直连服务器
+    if (config.serverAddress) {
+      const parts = config.serverAddress.split(':');
+      args.push('--server', parts[0]);
+      if (parts.length > 1 && parts[1].length > 0) {
+        args.push('--port', parts[1]);
+      }
+    }
+
+    // 演示模式
+    if (config.demo) {
+      args.push('--demo');
+    }
+
+    return args;
+  }
+
+  /**
+   * 获取主类名
+   * 优先用继承链解析出的 mainClass, 其次看是否为加载器版本
+   */
+  private getMainClass(config: LaunchConfig, version: GameVersion): string {
+    if (version.mainClass && version.mainClass.length > 0) {
+      return version.mainClass;
+    }
+    // Forge/Fabric 加载器版本的 mainClass 通常在父版本, 缺失时用通用入口
     return 'net.minecraft.client.main.Main';
   }
 
@@ -212,7 +305,7 @@ export class GameLauncherService {
    * - 需要 ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY ACL 权限（JIT 必须）
    * - 游戏输出经 dup2 重定向到 <gameDir>/logs/latest.log，GameLogViewer 轮询读取
    */
-  async launchGame(config: LaunchConfig): Promise<LaunchResult> {
+  async launchGame(config: LaunchConfig, version?: GameVersion): Promise<LaunchResult> {
     if (this.processState.isRunning) {
       return { success: false, error: 'Game is already running' };
     }
@@ -228,8 +321,18 @@ export class GameLauncherService {
         return { success: false, error: 'Java runtime not found. Please download JDK first.' };
       }
 
+      // 解析版本信息（含 inheritsFrom 继承链）
+      const resolved = version ?? this.resolveLocalVersion(config.version);
+      if (!resolved) {
+        return {
+          success: false,
+          error: `Version ${config.version} not installed. Please download it first.`
+        };
+      }
+
       // 验证游戏文件
-      const versionJar = `${config.gameDir}/versions/${config.version}/${config.version}.jar`;
+      const ownerId = resolved.clientJarId ?? config.version;
+      const versionJar = `${config.gameDir}/versions/${ownerId}/${ownerId}.jar`;
       if (!FileUtils.exists(versionJar)) {
         return {
           success: false,
@@ -256,7 +359,7 @@ export class GameLauncherService {
       }
 
       // 构建命令行（native 侧解析 -Xmx / -cp / 主类 / --gameDir）
-      const commandArgs = this.buildLaunchCommand(config);
+      const commandArgs = this.buildLaunchCommand(config, resolved);
       hilog.info(0x0000, TAG, `Command: ${commandArgs.slice(0, 8).join(' ')} ...`);
 
       // 推导 JDK 根目录：<jdk>/bin/java → <jdk>
@@ -274,6 +377,7 @@ export class GameLauncherService {
       this.logLine(`[FCL] Launching Minecraft ${config.version}...`);
       this.logLine(`[FCL] JDK: ${jdkDir}`);
       this.logLine(`[FCL] Memory: ${config.minMemory}M-${config.maxMemory}M`);
+      this.rememberVersion(config.version);
 
       // ============ NAPI 调用：进程内嵌入 JVM 并运行主类 ============
       // 阻塞语义由 Promise 承载：native 侧在 libuv 工作线程 jvmInit + jvmCallMain，
@@ -306,6 +410,212 @@ export class GameLauncherService {
       }
       return { success: false, error: error.message };
     }
+  }
+
+  /**
+   * 从本地版本 JSON 解析版本信息 (含 inheritsFrom 继承链)
+   * 纯本地读取, 不发起网络请求
+   */
+  resolveLocalVersion(versionId: string): GameVersion | null {
+    const chain: GameVersion[] = [];
+    let currentId = versionId;
+    const visited: Set<string> = new Set();
+
+    while (currentId.length > 0 && !visited.has(currentId)) {
+      visited.add(currentId);
+      const jsonPath = `${FileUtils.getVersionsDir()}/${currentId}/${currentId}.json`;
+      const raw = FileUtils.readJSON<Record<string, Object>>(jsonPath);
+      if (!raw) {
+        break;
+      }
+      const parsed = this.parseLocalVersion(raw, currentId);
+      chain.push(parsed);
+      currentId = parsed.inheritsFrom ?? '';
+    }
+
+    if (chain.length === 0) {
+      return null;
+    }
+    return this.mergeLocalChain(chain, versionId);
+  }
+
+  /** 解析本地版本 JSON */
+  private parseLocalVersion(raw: Record<string, Object>, fallbackId: string): GameVersion {
+    const argsRaw = raw['arguments'] as Object | undefined;
+    const parsedArgs = VersionArguments.parse(argsRaw);
+    const libraries: Library[] = [];
+    const libsRaw = raw['libraries'] as Array<Record<string, Object>> | undefined;
+    if (libsRaw) {
+      for (const lib of libsRaw) {
+        libraries.push({
+          name: lib['name'] as string ?? '',
+          downloads: lib['downloads'] as LibraryDownloads,
+          natives: lib['natives'] as Record<string, string>,
+          rules: lib['rules'] as LibraryRule[],
+          url: lib['url'] as string
+        });
+      }
+    }
+    const idVal = raw['id'] as string;
+    const typeVal = raw['type'] as VersionType;
+    const inheritsVal = raw['inheritsFrom'] as string;
+    const mainClassVal = raw['mainClass'] as string;
+    const releaseVal = raw['releaseTime'] as string;
+    return {
+      id: idVal ?? fallbackId,
+      type: typeVal ?? VersionType.RELEASE,
+      inheritsFrom: inheritsVal,
+      mainClass: mainClassVal ?? '',
+      downloads: this.parseLocalDownloads(raw['downloads']),
+      arguments: parsedArgs,
+      libraries: libraries,
+      assetIndex: raw['assetIndex'] as AssetIndex,
+      javaVersion: raw['javaVersion'] as JavaVersion,
+      releaseTime: releaseVal ?? ''
+    };
+  }
+
+  /** 解析本地 downloads 段 */
+  private parseLocalDownloads(raw: Object | undefined): VersionDownloads | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    const obj = raw as Record<string, Object>;
+    const result: VersionDownloads = {};
+    const clientRaw = obj['client'];
+    if (clientRaw) {
+      const c = clientRaw as Record<string, Object>;
+      result.client = {
+        path: c['path'] as string ?? '',
+        sha1: c['sha1'] as string ?? '',
+        size: c['size'] as number ?? 0,
+        url: c['url'] as string ?? ''
+      };
+    }
+    const serverRaw = obj['server'];
+    if (serverRaw) {
+      const s = serverRaw as Record<string, Object>;
+      result.server = {
+        path: s['path'] as string ?? '',
+        sha1: s['sha1'] as string ?? '',
+        size: s['size'] as number ?? 0,
+        url: s['url'] as string ?? ''
+      };
+    }
+    return result;
+  }
+
+  /** 合并本地继承链 (父 → 子) */
+  private mergeLocalChain(chain: GameVersion[], versionId: string): GameVersion {
+    const merged: GameVersion = {
+      id: chain[0].id,
+      type: chain[0].type,
+      mainClass: chain[0].mainClass,
+      arguments: { game: [], jvm: [] },
+      libraries: [],
+      assetIndex: undefined,
+      javaVersion: undefined,
+      releaseTime: chain[0].releaseTime,
+      downloads: chain[0].downloads
+    };
+
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const v = chain[i];
+      if (v.mainClass && v.mainClass.length > 0) {
+        merged.mainClass = v.mainClass;
+      }
+      if (v.assetIndex) {
+        merged.assetIndex = v.assetIndex;
+      }
+      if (v.javaVersion) {
+        merged.javaVersion = v.javaVersion;
+      }
+      if (v.downloads && v.downloads.client) {
+        merged.downloads = v.downloads;
+        merged.clientJarId = v.id;
+      }
+      for (const lib of v.libraries) {
+        const idx = merged.libraries.findIndex(l => l.name === lib.name);
+        if (idx >= 0) {
+          merged.libraries[idx] = lib;
+        } else {
+          merged.libraries.push(lib);
+        }
+      }
+      merged.arguments.game = this.mergeArgs(merged.arguments.game, v.arguments?.game ?? []);
+      merged.arguments.jvm = this.mergeArgs(merged.arguments.jvm, v.arguments?.jvm ?? []);
+    }
+
+    // 依赖库二次去重: 同 groupId:artifactId 保留最高版本
+    merged.libraries = LibraryRules.uniqueLibraries(merged.libraries);
+
+    merged.id = versionId;
+    return merged;
+  }
+
+  /** 合并参数 (同 key 由子覆盖) */
+  private mergeArgs(base: string[], override: string[]): string[] {
+    const overridden: Set<string> = new Set();
+    for (const arg of override) {
+      const key = this.argKey(arg);
+      if (key.length > 0) {
+        overridden.add(key);
+      }
+    }
+    const result: string[] = [];
+    for (const arg of base) {
+      const key = this.argKey(arg);
+      if (key.length === 0 || !overridden.has(key)) {
+        result.push(arg);
+      }
+    }
+    for (const arg of override) {
+      result.push(arg);
+    }
+    return result;
+  }
+
+  /** 提取参数标识用于覆盖判定 */
+  private argKey(arg: string): string {
+    if (arg.startsWith('--')) {
+      const space = arg.indexOf(' ');
+      return space > 0 ? arg.substring(0, space) : arg;
+    }
+    if (arg.startsWith('-D')) {
+      const eq = arg.indexOf('=');
+      return eq > 0 ? arg.substring(0, eq) : arg;
+    }
+    return '';
+  }
+
+  /**
+   * 记录最近一次启动的版本 (供多人页直连等场景复用)
+   */
+  private static readonly LAST_VERSION_FILE = 'fcl_last_version.txt';
+
+  private rememberVersion(versionId: string): void {
+    try {
+      FileUtils.writeText(`${AppContext.filesDir}/${GameLauncherService.LAST_VERSION_FILE}`, versionId);
+    } catch (err) {
+      hilog.warn(0x0000, TAG, `failed to remember last version: ${err}`);
+    }
+  }
+
+  /** 获取最近一次启动的版本 (无记录则回落到第一个已安装版本) */
+  getLastLaunchedVersion(): string {
+    const remembered = FileUtils.readText(
+      `${AppContext.filesDir}/${GameLauncherService.LAST_VERSION_FILE}`);
+    if (remembered !== null && remembered.trim().length > 0) {
+      return remembered.trim();
+    }
+    const versionsDir = FileUtils.getVersionsDir();
+    const dirs = FileUtils.listFiles(versionsDir);
+    for (const dir of dirs) {
+      if (FileUtils.exists(`${versionsDir}/${dir}/${dir}.json`)) {
+        return dir;
+      }
+    }
+    return '';
   }
 
   /**

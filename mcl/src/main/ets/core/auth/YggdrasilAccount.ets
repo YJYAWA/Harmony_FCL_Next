@@ -84,6 +84,13 @@ interface YggdrasilRefreshResponse {
   errorMessage?: string;
 }
 
+/** Yggdrasil Token 请求体 (refresh / validate / invalidate) */
+interface YggdrasilTokenRequest {
+  accessToken: string;
+  clientToken: string;
+  requestUser?: boolean;
+}
+
 /** 存储格式 */
 interface YggdrasilStorage {
   type: string;
@@ -225,13 +232,14 @@ export class YggdrasilAccount implements Account {
   private async refresh(): Promise<AuthInfo> {
     this.updateStatus('Refreshing login...');
 
+    const refreshBody: YggdrasilTokenRequest = {
+      accessToken: this.accessToken,
+      clientToken: this.clientToken,
+      requestUser: true
+    };
     const response = await this.httpPostJSON<YggdrasilRefreshResponse>(
       `${this.serverConfig.apiRoot}/authserver/refresh`,
-      {
-        accessToken: this.accessToken,
-        clientToken: this.clientToken,
-        requestUser: true
-      }
+      refreshBody
     );
 
     if (response.error) {
@@ -256,9 +264,13 @@ export class YggdrasilAccount implements Account {
     }
 
     try {
+      const validateBody: YggdrasilTokenRequest = {
+        accessToken: this.accessToken,
+        clientToken: this.clientToken
+      };
       const response = await this.httpPostJSON<Record<string, Object>>(
         `${this.serverConfig.apiRoot}/authserver/validate`,
-        { accessToken: this.accessToken, clientToken: this.clientToken }
+        validateBody
       );
       return true;
     } catch {
@@ -271,9 +283,13 @@ export class YggdrasilAccount implements Account {
    */
   async logOut(): Promise<void> {
     try {
-      await this.httpPostJSON(
+      const invalidateBody: YggdrasilTokenRequest = {
+        accessToken: this.accessToken,
+        clientToken: this.clientToken
+      };
+      await this.httpPostJSON<Record<string, Object>>(
         `${this.serverConfig.apiRoot}/authserver/invalidate`,
-        { accessToken: this.accessToken, clientToken: this.clientToken }
+        invalidateBody
       );
     } catch {
       // 忽略登出错误
@@ -351,7 +367,7 @@ export class YggdrasilAccount implements Account {
       if (response.result) {
         return JSON.parse(response.result as string) as T;
       }
-      return {} as T;
+      return JSON.parse('{}') as T;
     } catch (err) {
       const error = err as BusinessError;
       throw new ServerDisconnectException(`Yggdrasil HTTP error: ${error.message}`);

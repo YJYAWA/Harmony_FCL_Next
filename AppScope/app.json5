@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.harmony.fcl",
     "vendor": "example",
-    "versionCode": 1030403,
-    "versionName": "1.3.4.3-next.1",
+    "versionCode": 1030404,
+    "versionName": "1.3.4.3-next.2",
     "buildVersion": "1",
     // 系统按设备能力启用 GL/GLES 提供者（MobileGlues 需要；AMCL 同款配置）。
     // 必须在进程首次 EGL 调用前生效，不能在游戏启动后动态改写。
