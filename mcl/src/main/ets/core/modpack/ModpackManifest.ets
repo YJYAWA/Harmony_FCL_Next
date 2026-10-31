@@ -530,10 +530,14 @@ function parseModrinth(rootDir: string): ModpackManifest | null {
   const files: ModpackFileEntry[] = [];
   if (raw.files) {
     for (const file of raw.files) {
-      const path = file.path ?? '';
-      if (path.length === 0) {
+      const rawPath = file.path ?? '';
+      if (rawPath.length === 0) {
         continue;
       }
+      // Modrinth 旧版格式的 path 带 "overrides/" 前缀，新版直接是 "mods/xxx.jar"
+      const path = rawPath.startsWith('overrides/')
+        ? rawPath.substring('overrides/'.length)
+        : rawPath;
       let url = '';
       if (file.downloads && file.downloads.length > 0) {
         url = file.downloads[0];
@@ -550,7 +554,8 @@ function parseModrinth(rootDir: string): ModpackManifest | null {
         url: url,
         sha1: sha1,
         size: file.fileSize
-      });    }
+      });
+    }
   }
 
   const dependencies = raw.dependencies ?? {};
